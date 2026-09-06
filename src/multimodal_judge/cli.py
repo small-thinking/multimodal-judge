@@ -1,4 +1,4 @@
-"""Runtime device selection and a synthetic PyTorch smoke check."""
+"""Runtime checks and lazy dataset inspection."""
 
 import argparse
 import json
@@ -19,15 +19,27 @@ def select_device(requested, torch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["smoke"])
-    parser.add_argument("--config", type=Path, default=Path("configs/local.yaml"))
+    parser.add_argument("command", choices=["smoke", "inspect-data"])
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--device", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
-    config = yaml.safe_load(args.config.read_text())
+    config_path = args.config or Path(
+        "configs/data.yaml" if args.command == "inspect-data" else "configs/local.yaml")
+    config = yaml.safe_load(config_path.read_text())
     if not isinstance(config, dict):
         parser.error("Configuration must be a YAML mapping")
     if args.device is not None:
         config.setdefault("runtime", {})["device"] = args.device
+    if args.command == "inspect-data":
+        from .training_data import inspect_data
+
+        data = config["data"]
+        directory = args.data_dir if args.data_dir is not None else data["directory"]
+        print(json.dumps(inspect_data(
+            directory, data.get("train_file", "train.jsonl"),
+            data.get("validation_file", "validation.jsonl")), indent=2))
+        return
     import torch
 
     device = select_device(config["runtime"]["device"], torch)

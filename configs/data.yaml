@@ -1,0 +1,4 @@
+data:
+  directory: data/training_data/v2
+  train_file: train.jsonl
+  validation_file: validation.jsonl
