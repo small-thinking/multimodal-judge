@@ -72,3 +72,34 @@ git lfs pull
 
 Git stores pointers; Git LFS stores the image bytes. Data and model checkpoints
 remain external runtime files.
+
+## Data pipeline
+
+Put `train.jsonl` and optional `validation.jsonl`/`test.jsonl` in a dataset directory.
+Each row has `image`, nonempty `text`, and an integer `score` from 0 to 9;
+`reasoning` is optional. Example (synthetic):
+
+```json
+{"image":"../../images/example.png","text":"A blue square","score":5,"reasoning":"Clear shape."}
+```
+
+Image paths resolve relative to the JSONL file. Copy the whole `data/` directory
+when moving machines so those paths still resolve.
+
+```bash
+uv run --no-sync multimodal-judge inspect-data --config configs/data.yaml
+# Or point to a different release:
+uv run --no-sync multimodal-judge inspect-data --data-dir /path/to/release
+```
+
+The inspector checks schema, paths, score counts and recorded identity/hash
+cross-split overlap. It does not decode every image or prove perceptual deduplication.
+JSONL byte offsets are indexed in RAM; images are opened and decoded per sample,
+so memory does not scale with 10,000 decoded images. Keep input files immutable
+during a run.
+
+The collators prepare score-only or score-plus-rationale batches with masked
+prompt/padding tokens and a score readout position before the answer. Missing
+rationale leaves score supervision only; overlong sequences fail explicitly.
+Tests use generated images and fake processors; an optional saved-processor
+check requires `MMJUDGE_TEST_PROCESSOR`. No model training is included in this layer.
