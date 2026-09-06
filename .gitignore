@@ -216,3 +216,31 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Private project planning and runtime state
+/scripts/
+/docs/PROJECT_PLAN.md
+/docs/PROJECT_PLAN.original.md
+.env.*
+!.env.example
+/data/
+/artifacts/
+/checkpoints/
+/models/
+/runs/
+/wandb/
+*.sqlite
+*.sqlite3
+*.sqlite*-wal
+*.sqlite*-shm
+*.db
+*.db-wal
+*.db-shm
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+.DS_Store
+
+# Local annotation tools
+/tools/
