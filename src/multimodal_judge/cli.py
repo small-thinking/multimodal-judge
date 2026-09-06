@@ -19,7 +19,7 @@ def select_device(requested, torch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["smoke", "inspect-data", "train", "train-joint", "judge"])
+    parser.add_argument("command", choices=["smoke", "inspect-data", "train-joint", "judge"])
     parser.add_argument("--config", type=Path)
     parser.add_argument("--model", help="Override model.name_or_path")
     parser.add_argument("--data-dir", type=Path, help="Directory containing split JSONL files")
@@ -49,8 +49,9 @@ def main():
                                config["training"]["max_new_tokens"], device)
         print(json.dumps({**result, "score_scale": [0, 9]}, ensure_ascii=False))
         return
-    default_configs = {"smoke": "configs/local.yaml", "train-joint": "configs/train-joint.yaml"}
-    config_path = args.config or Path(default_configs.get(args.command, "configs/train.yaml"))
+    default_configs = {"smoke": "configs/local.yaml", "inspect-data": "configs/data.yaml",
+                       "train-joint": "configs/train-joint.yaml"}
+    config_path = args.config or Path(default_configs[args.command])
     config = yaml.safe_load(config_path.read_text())
     if not isinstance(config, dict):
         parser.error("Configuration must be a YAML mapping")
@@ -73,11 +74,6 @@ def main():
             data["directory"], data.get("train_file", "train.jsonl"),
             data.get("validation_file", "validation.jsonl"),
         ), indent=2))
-        return
-    if args.command == "train":
-        from .training import run_training
-
-        run_training(config, resume_from_checkpoint=args.resume_from_checkpoint)
         return
     if args.command == "train-joint":
         from .joint_training import run_joint_training

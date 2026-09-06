@@ -47,8 +47,10 @@ uv run --no-sync multimodal-judge judge \
   --image /path/to/image.jpg --text 'Text to evaluate'
 ```
 
-The earlier score-token SFT baseline remains available through `train` and
-`configs/train.yaml`.
+`train-joint` is the single training entry point. `joint_training.py` runs the
+Trainer; `joint_model.py` defines the heads and losses; `joint_inference.py`
+restores a saved model for scoring and rationale generation. `training_config.py`
+holds configuration validation and small helpers; it is not another trainer.
 
 ## Build Docker locally
 
@@ -150,9 +152,10 @@ MMJUDGE_TEST_PROCESSOR=/absolute/path/to/processor MMJUDGE_TEST_MPS_JOINT=1 \
   uv run --no-sync pytest tests -q
 ```
 
-The full Mac suite passed 146 tests; Linux CPU Docker passed 142 with 4 skipped
-hardware/processor checks. Separate full-2B MPS profiling used **one
+GitHub Actions runs Ruff and CPU tests on PR creation/updates and pushes to
+`main`. Full-checkpoint training and GPU checks are separate local runs.
+Previous full-2B MPS profiling used **one
 synthetic image/text example repeated for five updates per run**, not the real
 8/1/1 dataset. Saved-adapter inference was also checked in a fresh process.
 This validates plumbing and short-run performance, not held-out quality or a
-10,000-example training run. See the [benchmark details](docs/joint-model.md).
+10,000-example training run. See the [model notes](docs/joint-model.md).

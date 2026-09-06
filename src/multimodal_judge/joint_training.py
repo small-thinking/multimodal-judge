@@ -11,39 +11,10 @@ from pathlib import Path
 import torch
 from transformers import Trainer, TrainerCallback
 
-from . import training as legacy
-
-
-_DEFAULTS = copy.deepcopy(legacy._DEFAULTS)
-_DEFAULTS['model'].update(attn_implementation='sdpa', dtype='bfloat16')
-_DEFAULTS['data'].update(max_length=1024, max_reasoning_tokens=128)
-_DEFAULTS['training'].update(
-    output_dir='artifacts/training/qwen3-vl-2b-joint', gradient_accumulation_steps=8,
-    eval_steps=100, save_steps=100, max_new_tokens=128, generate_eval=False)
-_DEFAULTS['runtime']['mps_memory_fraction'] = 0.75
-_DEFAULTS['objective'] = dict(rationale_weight=0.1, huber_delta=0.1,
-                              score_min=0.0, score_max=9.0, ce_chunk_size=32)
-
-
-def _resolve_config(config):
-    resolved = legacy._resolve_config(config, defaults=_DEFAULTS)
-    legacy._number(resolved['data']['max_reasoning_tokens'],
-                   'data.max_reasoning_tokens', 1, integer=True)
-    fraction = resolved['runtime']['mps_memory_fraction']
-    legacy._number(fraction, 'runtime.mps_memory_fraction')
-    if not 0 < fraction <= 1:
-        raise ValueError('runtime.mps_memory_fraction must be in (0, 1]')
-    objective = resolved['objective']
-    for key in ('rationale_weight', 'huber_delta'):
-        legacy._number(objective[key], f'objective.{key}')
-    if objective['huber_delta'] == 0:
-        raise ValueError('objective.huber_delta must be positive')
-    for key, expected in (('score_min', 0.0), ('score_max', 9.0)):
-        legacy._number(objective[key], f'objective.{key}')
-        if objective[key] != expected:
-            raise ValueError('Joint scores use the raw 0..9 contract')
-    legacy._number(objective['ce_chunk_size'], 'objective.ce_chunk_size', 1, integer=True)
-    return resolved
+from .training_config import (
+    language_attention_pattern, numeric_metrics, validate_number,
+    resolve_config as _resolve_config,
+)
 
 
 def joint_regression_metrics(prediction):
@@ -110,7 +81,7 @@ class MetricsCallback(TrainerCallback):
         self.start_step = state.global_step
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        values = {**legacy._numeric_metrics(logs or {}), **sampled_memory_metrics(self.device),
+        values = {**numeric_metrics(logs or {}), **sampled_memory_metrics(self.device),
                   'elapsed_seconds': time.perf_counter() - self.started,
                   'elapsed_optimizer_steps': state.global_step - self.start_step,
                   'optimizer_step': state.global_step}
@@ -192,7 +163,7 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
     from .joint_data import joint_messages, reasoning_prefix
 
     for name, value in (('max_length', max_length), ('max_new_tokens', max_new_tokens)):
-        legacy._number(value, name, 1, integer=True)
+        validate_number(value, name, 1, integer=True)
 
     def encode(prompt):
         batch = processor(text=[prompt], images=[image], return_tensors='pt', truncation=False)
@@ -381,7 +352,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
             config=hf_config, **load_options)
         if peft is not None:
             lora = resolved["lora"]
-            pattern = legacy.language_attention_pattern(lora["target_modules"])
+            pattern = language_attention_pattern(lora["target_modules"])
             if not any(re.fullmatch(pattern, name) for name, _ in model.named_modules()):
                 raise ValueError("No language attention modules matched the LoRA configuration")
             model = peft.get_peft_model(model, peft.LoraConfig(
@@ -412,9 +383,9 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
                           compute_metrics=joint_regression_metrics,
                           callbacks=[MetricsCallback(run, device)])
         result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-        metrics = {**legacy._numeric_metrics(result.metrics), **parameter_metrics}
+        metrics = {**numeric_metrics(result.metrics), **parameter_metrics}
         if do_eval:
-            metrics.update(legacy._numeric_metrics(trainer.evaluate()))
+            metrics.update(numeric_metrics(trainer.evaluate()))
         if do_eval and training["generate_eval"]:
             from types import SimpleNamespace
             predictions, references = [], []
@@ -434,7 +405,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
                        **sampled_memory_metrics(device),
                        train_samples=len(train_dataset), eval_samples=len(eval_dataset))
         if run is not None:
-            run.log({**legacy._numeric_metrics(metrics), "optimizer_step": trainer.state.global_step})
+            run.log({**numeric_metrics(metrics), "optimizer_step": trainer.state.global_step})
         (output / "metrics.json").write_text(
             json.dumps(metrics, indent=2, allow_nan=False) + "\n")
         exit_code = 0

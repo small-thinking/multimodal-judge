@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,17 +15,20 @@ import torch
 import yaml
 
 from multimodal_judge import joint_training as joint
+from multimodal_judge import training_config
 
 
-def test_config_defaults_match_yaml_and_do_not_mutate_legacy():
-    from multimodal_judge import training
-    before = copy.deepcopy(training._DEFAULTS)
+def test_config_defaults_match_yaml_and_are_independent():
+    config = yaml.safe_load(Path('configs/train-joint.yaml').read_text())
+    before = copy.deepcopy(config)
     defaults = joint._resolve_config({})
-    assert joint._resolve_config(yaml.safe_load(Path('configs/train-joint.yaml').read_text())) == defaults
-    assert defaults['objective']['rationale_weight'] == 0.1
-    assert defaults['data']['max_length'] == 1024
-    assert defaults['training']['gradient_accumulation_steps'] == 8
-    assert training._DEFAULTS == before
+    resolved = joint._resolve_config(config)
+    assert resolved == defaults
+    assert config == before
+    resolved['lora']['target_modules'].append('k_proj')
+    resolved['objective']['rationale_weight'] = 1
+    assert config == before
+    assert joint._resolve_config({}) == defaults
 
 
 @pytest.mark.parametrize('section,key,value', [
@@ -367,3 +371,39 @@ def test_runner_wandb_numeric_logging_and_cleanup(local_runner, monkeypatch, fai
     run.define_metric.assert_any_call('*', step_metric='optimizer_step')
     wandb.Settings.assert_called_once_with(disable_code=True, disable_git=True, console='off')
     run.finish.assert_called_once_with(exit_code=1 if failure else 0)
+
+
+def test_language_attention_regex():
+    pattern = training_config.language_attention_pattern(["q_proj", "v_proj"])
+    assert re.fullmatch(pattern, "model.language_model.layers.0.self_attn.q_proj")
+    assert re.fullmatch(pattern, "base_model.model.model.language_model.layers.12.self_attn.v_proj")
+    for name in ("model.visual.blocks.0.attn.q_proj", "model.layers.0.self_attn.q_proj",
+                 "model.language_model.layers.0.mlp.q_proj",
+                 "model.language_model.layers.0.self_attn.k_proj",
+                 "visual.language_model.layers.0.self_attn.q_proj"):
+        assert not re.fullmatch(pattern, name)
+
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("training", "max_steps", 0), ("training", "learning_rate", float("nan")),
+    ("training", "gradient_accumulation_steps", 0), ("training", "generate_eval", "yes"),
+    ("training", "max_new_tokens", True), ("data", "max_train_samples", -1),
+    ("model", "dtype", "garbage"), ("model", "min_pixels", 100000),
+    ("wandb", "mode", "oops"), ("wandb", "raw_examples", []),
+    ("lora", "target_modules", ["visual"]), ("lora", "dropout", 1),
+    ("runtime", "device", "tpu"),
+])
+def test_shared_validation_precedes_model_loading(local_runner, section, key, value):
+    local_runner.config.setdefault(section, {})[key] = value
+    with pytest.raises(ValueError):
+        joint.run_joint_training(local_runner.config)
+    local_runner.config_loader.assert_not_called()
+    local_runner.processor_loader.assert_not_called()
+    local_runner.model_loader.assert_not_called()
+
+
+@pytest.mark.parametrize('config', [None, [], {'unknown': {}}, {'data': []}])
+def test_reject_invalid_config_structure(config):
+    with pytest.raises(ValueError):
+        training_config.resolve_config(config)
