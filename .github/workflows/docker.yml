@@ -1,0 +1,67 @@
+name: Publish Docker image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-docker
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+      - uses: actions/checkout@v6
+      - name: Free runner space for CUDA layers
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+      - uses: docker/setup-buildx-action@v4
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Build and load CUDA image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: cuda
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=cuda-amd64
+          cache-to: type=gha,mode=max,scope=cuda-amd64
+      - name: CPU smoke on CUDA image (no GPU validation)
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+        run: docker run --rm --network none "$IMAGE" smoke --device cpu --config configs/cpu.yaml
+      - name: Import joint training modules
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+        run: docker run --rm --network none --entrypoint python "$IMAGE" -c "import multimodal_judge.joint_training"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker push "$IMAGE:sha-$SHA"
+          docker tag "$IMAGE:sha-$SHA" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          DIGEST=$(docker image inspect "$IMAGE:sha-$SHA" --format '{{index .RepoDigests 0}}')
+          echo "Published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"

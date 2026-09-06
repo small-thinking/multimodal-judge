@@ -1,0 +1,30 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HF_HUB_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      MMJUDGE_TEST_PROCESSOR: ""
+      MMJUDGE_TEST_MPS_JOINT: "0"
+      WANDB_MODE: disabled
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: uv sync --locked --extra cpu --extra vlm --group dev
+      - run: uv run --locked --extra cpu --extra vlm ruff check src tests
+      - run: uv run --locked --extra cpu --extra vlm pytest tests -q
