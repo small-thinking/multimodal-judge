@@ -1,0 +1,52 @@
+# Run from the repository root. Joint regression + bounded rationale SFT.
+model:
+  name_or_path: Qwen/Qwen3-VL-2B-Instruct
+  dtype: bfloat16  # Full 2B backward verified on this M4 Pro; --dtype float32 is the fallback.
+  attn_implementation: sdpa
+  min_pixels: 4096
+  max_pixels: 65536
+objective:
+  rationale_weight: 0.1
+  huber_delta: 0.1
+  score_min: 0.0
+  score_max: 9.0
+  ce_chunk_size: 32
+data:
+  directory: data/training_data/v2
+  train_file: train.jsonl
+  validation_file: validation.jsonl
+  max_train_samples: null
+  max_eval_samples: null
+  max_length: 1024
+  max_reasoning_tokens: 128
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj]
+runtime:
+  device: auto
+  mps_memory_fraction: 0.75
+training:
+  output_dir: artifacts/training/qwen3-vl-2b-joint
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  logging_steps: 1
+  eval_steps: 100
+  save_steps: 100
+  save_total_limit: 2
+  gradient_checkpointing: true
+  dataloader_num_workers: 0
+  seed: 42
+  generate_eval: false  # Optional final rationale generation using PREDICTED scores.
+  max_new_tokens: 128
+wandb:
+  project: multimodal-judge
+  entity: null
+  mode: offline
+  name: null

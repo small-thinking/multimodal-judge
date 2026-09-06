@@ -1,0 +1,33 @@
+services:
+  cpu:
+    build:
+      context: .
+      target: cpu
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - model-cache:/app/cache
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+  gpu:
+    profiles: [gpu]
+    platform: linux/amd64
+    build:
+      context: .
+      target: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 2gb
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - model-cache:/app/cache
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+volumes:
+  model-cache:

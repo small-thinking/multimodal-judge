@@ -1,0 +1,54 @@
+[project]
+name = "multimodal-judge"
+version = "0.1.0"
+description = "Portable image-text scoring research"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "pyyaml>=6.0.2,<7",
+    "requests>=2.34.2",
+]
+
+[project.optional-dependencies]
+cpu = ["torch==2.8.0", "torchvision==0.23.0"]
+cuda = ["torch==2.8.0", "torchvision==0.23.0"]
+vlm = ["transformers>=4.57,<5", "peft>=0.17,<0.18", "accelerate>=1.10,<2", "datasets>=4,<5", "safetensors>=0.6,<1", "pillow>=11,<12", "wandb>=0.21,<1", "tqdm>=4.67,<5"]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "ruff>=0.12,<0.13"]
+
+[project.scripts]
+multimodal-judge = "multimodal_judge.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+required-version = ">=0.8.22"
+conflicts = [[{extra = "cpu"}, {extra = "cuda"}]]
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'", "sys_platform == 'linux' and platform_machine == 'aarch64'", "sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torchvision = [
+  {index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'"},
+  {index = "pytorch-cu128", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'"},
+]
+torch = [
+  {index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'"},
+  {index = "pytorch-cu128", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'"},
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.ruff]
+line-length = 100

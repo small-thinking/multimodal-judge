@@ -1,0 +1,44 @@
+# All relative paths resolve from the working directory (run from the repo root).
+model:
+  name_or_path: Qwen/Qwen3-VL-2B-Instruct
+  dtype: float32
+  attn_implementation: eager
+  min_pixels: 4096
+  max_pixels: 65536
+data:
+  directory: data/training_data/v2
+  train_file: train.jsonl
+  validation_file: validation.jsonl
+  max_train_samples: null
+  max_eval_samples: null
+  max_length: 2048
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj]
+runtime:
+  device: auto
+training:
+  output_dir: artifacts/training/qwen3-vl-2b
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0002
+  logging_steps: 1
+  eval_steps: 10
+  save_steps: 10
+  save_total_limit: 2
+  gradient_checkpointing: true
+  dataloader_num_workers: 0
+  seed: 42
+  generate_eval: true
+  max_new_tokens: 8
+wandb:
+  project: multimodal-judge
+  entity: null
+  mode: offline
+  name: null
