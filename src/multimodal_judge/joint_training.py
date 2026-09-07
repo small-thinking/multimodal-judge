@@ -69,6 +69,20 @@ def sampled_memory_metrics(device):
             'mps_sampled_driver_bytes': torch.mps.driver_allocated_memory()}
 
 
+def training_chart_metrics(logs):
+    names = {'loss': 'loss', 'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
+             'learning_rate': 'learning_rate', 'grad_norm': 'grad_norm'}
+    result = {}
+    for key, value in numeric_metrics(logs).items():
+        if key.startswith('eval_'):
+            name = key.removeprefix('eval_')
+            if name in ('loss', 'mae', 'rmse', 'accuracy', 'within_one'):
+                result['validation/' + name] = value
+        elif key in names:
+            result['train/' + names[key]] = value
+    return result
+
+
 class MetricsCallback(TrainerCallback):
     def __init__(self, run, device):
         self.run = run
@@ -89,7 +103,9 @@ class MetricsCallback(TrainerCallback):
             logs.update(values)
         if self.run is not None:
             # W&B's internal step must advance even when optimizer_step is unchanged.
-            self.run.log(values)
+            charts = training_chart_metrics(logs or {})
+            if charts:
+                self.run.log({**charts, "optimizer_step": state.global_step})
 
 
 class JointTrainer(Trainer):
@@ -329,7 +345,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
             run = wandb.init(**resolved["wandb"], config=resolved, dir=str(output),
                              settings=wandb.Settings(disable_code=True, disable_git=True,
                                                      console="off"))
-            run.define_metric("optimizer_step")
+            run.define_metric("optimizer_step", hidden=True)
             run.define_metric("*", step_metric="optimizer_step")
 
         set_seed(training["seed"])
@@ -417,7 +433,10 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
                        **sampled_memory_metrics(device),
                        train_samples=len(train_dataset), eval_samples=len(eval_dataset))
         if run is not None:
-            run.log({**numeric_metrics(metrics), "optimizer_step": trainer.state.global_step})
+            run.summary.update({"validation/" + key.removeprefix("eval_"): value
+                                for key, value in numeric_metrics(metrics).items()
+                                if key in ("eval_loss", "eval_mae", "eval_rmse", "eval_accuracy",
+                                           "eval_within_one")})
         (output / "metrics.json").write_text(
             json.dumps(metrics, indent=2, allow_nan=False) + "\n")
         exit_code = 0

@@ -109,19 +109,7 @@ def import_reasoning_reviews(source_report, scores_path, output_dir, reviewer):
             raise ValueError('Reasoning rubric hash mismatch')
         seen.add(identity)
         response = record['response']
-        if not isinstance(response, dict):
-            raise ValueError('Reasoning response must be a JSON object')
-        if response.get('status') == 'scored':
-            values = response.get('dimensions', {})
-            if not isinstance(values, dict) or set(values) != set(evaluation['rubric']['dimensions']):
-                raise ValueError('Reasoning dimensions must match the rubric exactly')
-            for value in values.values():
-                if (not isinstance(value, dict) or type(value.get('rating')) is not int or value['rating'] not in (1, 2, 3)
-                        or not isinstance(value.get('reasoning'), str) or not value['reasoning'].strip()):
-                    raise ValueError('Each dimension requires integer 1–3 and a nonempty explanation')
-        elif (response.get('status') != 'unscorable'
-              or not isinstance(response.get('reason'), str) or not response['reason'].strip()):
-            raise ValueError('Expected scored review, or unscorable with a reason')
+        validate_review(response, evaluation['rubric'])
         target = evaluation['mapping'][identity]
         rows[target['index']]['predictions'][target['method']]['reasoning_review'] = response
     if not seen:
@@ -154,3 +142,19 @@ def prepare_reasoning_report(source_report, rubric_path, output_dir):
         report.pop(key, None)
     write_json(output / 'report.json', report)
     return report
+
+
+def validate_review(response, rubric):
+    if not isinstance(response, dict):
+        raise ValueError('Reasoning response must be a JSON object')
+    if response.get('status') == 'scored':
+        values = response.get('dimensions', {})
+        if not isinstance(values, dict) or set(values) != set(rubric['dimensions']):
+            raise ValueError('Reasoning dimensions must match the rubric exactly')
+        for value in values.values():
+            if (not isinstance(value, dict) or type(value.get('rating')) is not int or value['rating'] not in (1, 2, 3)
+                    or not isinstance(value.get('reasoning'), str) or not value['reasoning'].strip()):
+                raise ValueError('Each dimension requires integer 1–3 and a nonempty explanation')
+    elif (response.get('status') != 'unscorable'
+          or not isinstance(response.get('reason'), str) or not response['reason'].strip()):
+        raise ValueError('Expected scored review, or unscorable with a reason')

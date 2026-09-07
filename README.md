@@ -266,3 +266,36 @@ The page shows per-dimension results and coverage; W&B logs `reasoning/<method>/
 aggregates only. Rubric scores depend on the reviewer and are not ground truth. Do not
 mix reviewers or rubric versions in a comparison. New base inference explicitly asks
 for Chinese reasoning and JSON; old runs retain their original prompt and are labeled legacy.
+
+### Optional reasoning judge
+
+In Evaluation Center, select a rubric and enable **LLM judge**. The default is
+`grok-4.6` with `reasoning_effort=low` (4.6 does not support `none`). Set
+`XAI_API_KEY` in the process environment before starting the center. Only the
+image, title, candidate explanation and rubric are sent to xAI.
+
+You can also grade saved predictions without running the VLM again:
+
+```bash
+uv run --no-sync multimodal-judge prepare-reasoning-reviews \
+  --report artifacts/evaluation/runs/<run>/report.json \
+  --reasoning-rubric configs/rubrics/reasoning-v1.yaml \
+  --output-dir artifacts/evaluation/runs/<new-run> \
+  --enable-llm-judge --judge-model grok-4.6 --judge-effort low \
+  --wandb-mode online
+```
+
+The same judge flags work with `evaluate`. Valid results are cached under
+`artifacts/evaluation/judge-cache`; use `--judge-cache-dir` to change it. Keep this
+directory between runs (mount it as a volume in Docker). Exact requests reuse the
+saved result without an API call, including after an interrupted run. Changing
+image bytes, text, rubric, model or generation settings produces a new cache key.
+Model aliases can change server-side; clear the cache or use a pinned model ID
+when intentionally refreshing a judge version.
+
+W&B training charts use `train/*` for step losses, learning rate and gradient norm,
+and `validation/*` for loss, MAE and RMSE. Evaluation logs retain rating error,
+accuracy and coverage under `evaluation/*`, plus rubric means and coverage under
+`reasoning/*`. Counts, timing, memory diagnostics and per-score details stay local.
+The old `train_loss` was one final average; `train/loss` is the step time series.
+Existing W&B runs keep their historical charts; this change applies to new runs.

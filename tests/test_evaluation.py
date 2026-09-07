@@ -156,7 +156,14 @@ def test_center_launch_is_single_job_and_uses_argument_list(tmp_path, monkeypatc
     options = {'checkpoint': str(checkpoint.relative_to(tmp_path)),
                'data_dir': str(data.relative_to(tmp_path)), 'split': 'test',
                'wandb_mode': 'disabled', 'include_base': True}
+    rubric = tmp_path / 'configs/rubrics/draft.yaml'
+    rubric.parent.mkdir(parents=True)
+    rubric.write_text('version: draft')
+    with pytest.raises(ValueError, match='rubric'):
+        center.launch({**options, 'enable_llm_judge': True})
+    options.update(enable_llm_judge=True, reasoning_rubric='configs/rubrics/draft.yaml')
     result = center.launch(options)
+    assert '--enable-llm-judge' in spawn.call_args.args[0]
     assert '--include-base' in spawn.call_args.args[0]
     assert isinstance(spawn.call_args.args[0], list)
     assert center.state()['progress']['id'] == result['id']
@@ -182,8 +189,12 @@ def test_evaluation_cli_forwards_options(monkeypatch, tmp_path):
     monkeypatch.setattr(evaluation, 'run_evaluation', run)
     monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'evaluate', '--checkpoint', 'model',
         '--data-dir', 'data', '--output-dir', str(tmp_path), '--split', 'validation',
-        '--include-base', '--max-samples', '2', '--wandb-mode', 'disabled'])
+        '--include-base', '--max-samples', '2', '--wandb-mode', 'disabled',
+        '--enable-llm-judge', '--reasoning-rubric', 'rubric.yaml'])
     main()
+    assert run.call_args.kwargs['enable_llm_judge'] is True
+    assert run.call_args.kwargs['judge_model'] == 'grok-4.6'
+    assert run.call_args.kwargs['judge_effort'] == 'low'
     assert run.call_args.kwargs['split'] == 'validation'
     assert run.call_args.kwargs['include_base'] is True
     assert run.call_args.kwargs['max_samples'] == 2
