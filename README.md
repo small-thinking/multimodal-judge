@@ -271,7 +271,7 @@ for Chinese reasoning and JSON; old runs retain their original prompt and are la
 
 In Evaluation Center, select a rubric and enable **LLM judge**. The default is
 `grok-4.6` with `reasoning_effort=low` (4.6 does not support `none`). Set
-`XAI_API_KEY` in the process environment before starting the center. Only the
+`GROK_API_KEY` in the project `.env` or process environment before starting the center. Only the
 image, title, candidate explanation and rubric are sent to xAI.
 
 You can also grade saved predictions without running the VLM again:
@@ -299,3 +299,8 @@ accuracy and coverage under `evaluation/*`, plus rubric means and coverage under
 `reasoning/*`. Counts, timing, memory diagnostics and per-score details stay local.
 The old `train_loss` was one final average; `train/loss` is the step time series.
 Existing W&B runs keep their historical charts; this change applies to new runs.
+
+Base evaluation reads `src/multimodal_judge/prompts/base-evaluation.txt` by default.
+Edit that file, or pass `--base-system-prompt path/to/prompt.txt` to `evaluate`.
+This is the complete base system prompt, independent of the checkpoint's training
+prompt. Each report saves the exact prompt used; edits affect future evaluations.

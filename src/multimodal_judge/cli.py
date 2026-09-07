@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--dtype", choices=["float32", "bfloat16"])
     parser.add_argument("--split", choices=["test", "validation"], default="test")
     parser.add_argument("--include-base", action="store_true")
+    parser.add_argument("--base-system-prompt", type=Path, help="Override the base evaluation prompt file")
     parser.add_argument("--max-samples", type=int)
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--wandb-project", default="multimodal-judge")
@@ -102,7 +103,7 @@ def main():
             wandb_entity=args.wandb_entity, training_run_url=args.training_run_url,
             reasoning_rubric=args.reasoning_rubric, enable_llm_judge=args.enable_llm_judge,
             judge_model=args.judge_model, judge_effort=args.judge_effort,
-            judge_cache_dir=args.judge_cache_dir)
+            judge_cache_dir=args.judge_cache_dir, base_system_prompt=args.base_system_prompt)
         print(json.dumps(result["metrics"], indent=2))
         return
     if args.command == "judge":

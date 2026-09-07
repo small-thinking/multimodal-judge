@@ -11,6 +11,8 @@ from multimodal_judge import llm_judge as judge
 
 @pytest.fixture
 def sample(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('GROK_API_KEY', raising=False)
     image = tmp_path / 'image.png'
     image.write_bytes(b'original-image')
     rubric = {'dimensions': {'accuracy': {}}}
@@ -91,3 +93,15 @@ def test_cross_predictor_reuse_and_report_persistence(sample, tmp_path):
     assert saved['reasoning_evaluation']['cache'] == {'hits': 1, 'api_calls': 1}
     assert saved['rows'][0]['predictions']['base']['reasoning_review'] == review
     assert saved['reasoning_evaluation']['metrics']['joint']['accuracy_mean'] == 2
+
+
+def test_grok_key_from_dotenv_and_environment_precedence(sample, monkeypatch):
+    payload, rubric, cache, post, _ = sample
+    monkeypatch.delenv('XAI_API_KEY')
+    from pathlib import Path
+    Path('.env').write_text('GROK_API_KEY="file-key"\n')
+    judge.cached_review(payload, rubric, cache)
+    assert post.call_args.kwargs['headers']['Authorization'] == 'Bearer file-key'
+    monkeypatch.setenv('GROK_API_KEY', 'environment-key')
+    judge.cached_review(payload, rubric, cache / 'different')
+    assert post.call_args.kwargs['headers']['Authorization'] == 'Bearer environment-key'

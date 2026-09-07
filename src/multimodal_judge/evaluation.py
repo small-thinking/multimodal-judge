@@ -63,13 +63,12 @@ def log_evaluation(report_path, mode='online', project='multimodal-judge', entit
     return report['wandb_url']
 
 
-def _base_prompt(saved):
-    marker = ' Complete the reasoning for the supplied rating;'
-    if marker in saved:
-        saved = saved.split(marker)[0]
-    return saved + ('\n请自行给出 0–9 分的 rating，并用简体中文写简短的 reasoning。'
-                    '只输出一个合法 JSON 对象，恰好包含 rating（数字）和 reasoning（字符串）。'
-                    '先写 rating，再写 reasoning；不要 Markdown 或 JSON 之外的文字。')
+def _base_prompt(path=None):
+    path = Path(path) if path is not None else Path(__file__).with_name('prompts') / 'base-evaluation.txt'
+    prompt = path.read_text().strip()
+    if not prompt:
+        raise ValueError('Base system prompt must not be empty')
+    return prompt
 
 
 def _base_predict(model, processor, image, text, system, config, device, limit):
@@ -99,12 +98,13 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
                    wandb_mode='offline', wandb_project='multimodal-judge', wandb_entity=None,
                    training_run_url=None, reasoning_rubric=None, enable_llm_judge=False,
                    judge_model="grok-4.6", judge_effort="low",
-                   judge_cache_dir="artifacts/evaluation/judge-cache"):
+                   judge_cache_dir="artifacts/evaluation/judge-cache", base_system_prompt=None):
     from tqdm import tqdm
     from .joint_data import JointScoreDataset
     from .joint_inference import load_joint_checkpoint
     from .joint_training import predict_joint
 
+    resolved_base_prompt = _base_prompt(base_system_prompt) if include_base else None
     if enable_llm_judge and judge_model == 'grok-4.6' and judge_effort == 'none':
         raise ValueError('Grok 4.6 does not support reasoning=none')
     if enable_llm_judge and reasoning_rubric is None:
@@ -183,7 +183,7 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
                     attn_implementation=config['model']['attn_implementation']).to(device).eval()
                 report['methods'].append('base')
                 report['base_output_policy'] = 'zh-json-v1'
-                report['base_system_prompt'] = _base_prompt(config.get('prompt', {}).get('system', ''))
+                report['base_system_prompt'] = resolved_base_prompt
             for i in tqdm(range(len(dataset)), desc=f'{split}/{method}'):
                 row = dataset[i]
                 started = time.perf_counter()

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import requests
 from tqdm import tqdm
+from dotenv import dotenv_values
 
 from .evaluation import write_json
 from .reasoning_evaluation import summarize_reasoning, validate_review
@@ -52,9 +53,10 @@ def cached_review(payload, rubric, cache_dir):
                 raise ValueError('Judge cache hash mismatch; remove this cache entry and retry')
             validate_review(record['response'], rubric)
             return record['response'], True
-        api_key = os.environ.get('XAI_API_KEY')
+        api_key = (os.environ.get('GROK_API_KEY') or dotenv_values('.env').get('GROK_API_KEY')
+                   or os.environ.get('XAI_API_KEY'))
         if not api_key:
-            raise ValueError('Set XAI_API_KEY to evaluate uncached reasoning reviews')
+            raise ValueError('Set GROK_API_KEY in the environment or project .env to evaluate uncached reviews')
         response = requests.post(ENDPOINT, json=payload,
                                  headers={'Authorization': f'Bearer {api_key}'}, timeout=(10, 120))
         response.raise_for_status()
