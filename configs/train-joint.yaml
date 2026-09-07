@@ -1,3 +1,5 @@
+prompt:
+  system: ""  # Optional system message; use YAML | for multiple lines.
 # Run from the repository root. Joint regression + bounded rationale SFT.
 model:
   name_or_path: Qwen/Qwen3-VL-2B-Instruct
