@@ -2,7 +2,8 @@
 
 Qwen3-VL image-text judge: a continuous **0–9 score** and optional rationale.
 Training uses a frozen 2B backbone, language-attention LoRA and a scalar scoring
-head. BF16 base weights keep FP32 adapters, head and loss calculations.
+head, or an optional ten-class head whose probability-weighted rating is continuous.
+BF16 base weights keep FP32 adapters, head and loss calculations.
 See [architecture and measured Mac performance](docs/joint-model.md).
 The architecture PNG is stored in Git LFS. After cloning, install Git LFS and
 run `git lfs install --local && git lfs pull` to download documentation images.
@@ -87,6 +88,34 @@ uv run --no-sync multimodal-judge judge \
 Trainer; `joint_model.py` defines the heads and losses; `joint_inference.py`
 restores a saved model for scoring and rationale generation. `training_config.py`
 holds configuration validation and small helpers; it is not another trainer.
+
+### Select the scoring head and loss weight
+
+Use the batch-16 reference config for new local comparisons. These commands each
+create a fresh run; they do not convert an existing regression checkpoint:
+
+```bash
+# Increase only the regression-loss weight. 5 is an experiment value, not a tuned default.
+uv run --no-sync multimodal-judge train-joint --config configs/train-joint-batch16.yaml \
+  --score-head regression --score-weight 5 --wandb-mode disabled
+
+# Ten-class (0–9) cross-entropy head, reporting a continuous expected rating.
+uv run --no-sync multimodal-judge train-joint --config configs/train-joint-batch16.yaml \
+  --score-head classification --score-weight 1 --wandb-mode disabled
+```
+
+The same settings are `objective.head_type` and `objective.score_weight` in YAML.
+The default remains regression with score weight 1. Total loss is
+`score_weight * score_loss + rationale_weight * rationale_loss`; logged component
+losses remain unweighted. CE and normalized Huber have different scales, so the
+same score weight does not imply matched task balance across heads. Classification
+does not guarantee better MAE/RMSE and is not an ordinal objective.
+
+The batch-16 config uses gradient accumulation 1, learning rate 1e-4, two epochs,
+dataset v5 and disabled W&B. Change one factor per comparison and retain the same
+update budget. Inference and Evaluation Center restore the head from the checkpoint;
+no head flag is needed. Old checkpoints remain compatible. Switching head type or
+loss weights is rejected on resume: use a fresh training run.
 
 ## Evaluate a checkpoint
 

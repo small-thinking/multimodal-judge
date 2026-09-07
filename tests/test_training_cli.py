@@ -83,6 +83,55 @@ def test_joint_command_preserves_overrides_and_resume(monkeypatch, capsys):
     run.assert_called_once_with(config, resume_from_checkpoint='checkpoint-1')
     assert json.loads(capsys.readouterr().out) == {'train_loss': 0.25}
 
+
+@pytest.mark.parametrize('head_type,weight', [('classification', '3.5'), ('regression', '0')])
+def test_joint_score_objective_cli_overrides_yaml(monkeypatch, tmp_path, head_type, weight):
+    path = tmp_path / 'config.yaml'
+    path.write_text('objective:\n  head_type: regression\n  score_weight: 7\n  rationale_weight: 0.25\n')
+    run = Mock(return_value={})
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(sys, 'argv', [
+        'multimodal-judge', 'train-joint', '--config', str(path),
+        '--score-head', head_type, '--score-weight', weight, '--wandb-mode', 'disabled',
+    ])
+    cli.main()
+    objective = run.call_args.args[0]['objective']
+    assert objective['head_type'] == head_type
+    assert objective['score_weight'] == float(weight)
+    assert objective['rationale_weight'] == .25
+
+
+def test_joint_score_head_cli_rejects_unknown_choice(monkeypatch, capsys):
+    run = Mock()
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train-joint', '--score-head', 'ordinal'])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert 'invalid choice' in capsys.readouterr().err
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize('flag,value', [('--score-head', 'classification'), ('--score-weight', '2')])
+def test_training_objective_flags_are_not_silently_ignored_by_judge(monkeypatch, capsys, flag, value):
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'judge', flag, value])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert 'only supported for train-joint' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('weight', ['-1', 'nan', 'inf'])
+def test_joint_score_weight_cli_rejects_invalid_values(monkeypatch, weight):
+    # Keep the real runner's config validation; reject before touching data/model.
+    validate_paths = Mock(side_effect=AssertionError('invalid weight reached dataset access'))
+    monkeypatch.setattr(joint_training, '_validate_paths', validate_paths)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train-joint', '--score-weight', weight,
+                                    '--wandb-mode', 'disabled'])
+    with pytest.raises(ValueError, match='score_weight'):
+        cli.main()
+    validate_paths.assert_not_called()
+
 def test_judge_returns_rating_reasoning_json(monkeypatch, capsys, tmp_path):
     from PIL import Image
     from multimodal_judge import joint_inference

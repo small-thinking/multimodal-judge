@@ -312,6 +312,12 @@ def _validate_paths(resolved, resume):
             saved_config = checkpoint.parent / 'resolved_config.json'
         if saved_config.is_file():
             previous = json.loads(saved_config.read_text())
+            # Older runs predate head selection and score weighting. Only fill
+            # these new defaults; keep all other resume comparisons strict.
+            previous_objective = previous.get('objective')
+            if isinstance(previous_objective, dict):
+                previous_objective.setdefault('head_type', 'regression')
+                previous_objective.setdefault('score_weight', 1.0)
             if previous.get("prompt", {"system": ""}) != resolved["prompt"]:
                 raise ValueError("Resume prompt configuration differs from saved run")
             for section in ('model', 'objective', 'lora'):

@@ -22,6 +22,8 @@ def test_config_defaults_match_yaml_and_are_independent():
     config = yaml.safe_load(Path('configs/train-joint.yaml').read_text())
     before = copy.deepcopy(config)
     defaults = joint._resolve_config({})
+    assert defaults['objective']['head_type'] == 'regression'
+    assert defaults['objective']['score_weight'] == 1.0
     resolved = joint._resolve_config(config)
     assert resolved["prompt"] == config["prompt"]
     assert joint._resolve_config({"prompt": config["prompt"]}) == resolved
@@ -36,6 +38,9 @@ def test_config_defaults_match_yaml_and_are_independent():
     ('objective', 'rationale_weight', -1), ('objective', 'huber_delta', 0),
     ('objective', 'score_min', 1), ('objective', 'score_max', 10),
     ('objective', 'ce_chunk_size', True), ('objective', 'rationale_weight', float('nan')),
+    ('objective', 'score_weight', -1), ('objective', 'score_weight', float('inf')),
+    ('objective', 'score_weight', float('nan')), ('objective', 'score_weight', True),
+    ('objective', 'head_type', 'ordinal'), ('objective', 'head_type', None),
     ('data', 'max_reasoning_tokens', 0), ('runtime', 'mps_memory_fraction', 1.1),
     ('runtime', 'mps_memory_fraction', 0), ('training', 'max_steps', 0),
     ('prompt', 'system', None), ('prompt', 'system', 42),
@@ -199,10 +204,12 @@ def local_runner(config, monkeypatch):
                            inspect=inspect, collate=collate)
 
 
-def test_native_trainer_head_adapter_save_and_real_resume(local_runner):
+@pytest.mark.parametrize('head_type', ['regression', 'classification'])
+def test_native_trainer_head_adapter_save_and_real_resume(local_runner, head_type):
     from safetensors.torch import load_file
     runner = local_runner
     config = runner.config
+    config['objective'] = {'head_type': head_type}
     config['prompt'] = {'system': 'Use the saved rubric.'}
     (Path(config['data']['directory']) / 'validation.jsonl').write_text('{}\n')
     result = joint.run_joint_training(config)
@@ -215,10 +222,13 @@ def test_native_trainer_head_adapter_save_and_real_resume(local_runner):
     saved = load_file(str(checkpoint / 'adapter_model.safetensors'))
     head = {k: v for k, v in saved.items() if 'score_head' in k}
     assert head and all(value.dtype == torch.float32 for value in head.values())
+    width = 10 if head_type == 'classification' else 1
+    assert all(value.shape[0] == width for value in head.values())
     assert any('lora_B' in k and v.abs().sum() > 0 for k, v in saved.items())
     assert not any('visual' in k for k in saved)
     assert json.loads((checkpoint / 'adapter_config.json').read_text())['modules_to_save'] == ['score_head']
     assert json.loads((checkpoint / 'config.json').read_text())['judge_config']['rationale_weight'] == .1
+    assert json.loads((checkpoint / 'config.json').read_text())['judge_config']['head_type'] == head_type
     assert json.loads((output / 'resolved_config.json').read_text())['objective']['rationale_weight'] == .1
     for loader in (runner.processor_loader, runner.config_loader, runner.model_loader):
         assert loader.call_args.kwargs['trust_remote_code'] is False
@@ -240,9 +250,11 @@ def test_native_trainer_head_adapter_save_and_real_resume(local_runner):
         joint.run_joint_training(config, str(checkpoint))
 
 
-def test_bfloat16_base_fp32_entire_wrapped_head(local_runner):
+@pytest.mark.parametrize('head_type', ['regression', 'classification'])
+def test_bfloat16_base_fp32_entire_wrapped_head(local_runner, head_type):
     # CPU tiny native stack checks dtype persistence without claiming MPS support.
     local_runner.config['model'] = {'dtype': 'bfloat16'}
+    local_runner.config['objective'] = {'head_type': head_type}
     joint.run_joint_training(local_runner.config)
     model = local_runner.models[0]
     assert all(p.dtype == torch.float32 for p in model.score_head.parameters())
@@ -322,6 +334,7 @@ def test_prediction_step_never_gathers_auxiliary_outputs():
     trainer = TestTrainer()
     model = Mock(training=False, return_value=JointJudgeOutput(
         loss=torch.tensor(1.), logits=torch.tensor([[3.5], [6.5]]),
+        score_class_logits=torch.ones(2, 10),
         score_loss=torch.tensor(.25), rationale_loss=torch.tensor(.75),
         rationale_samples=torch.tensor(1), rationale_tokens=torch.tensor(4)))
     inputs = {'scores': torch.tensor([3., 7.]), 'labels': torch.ones(2, 100, dtype=torch.long)}
@@ -332,6 +345,47 @@ def test_prediction_step_never_gathers_auxiliary_outputs():
     assert trainer._eval_totals.metrics()['rationale_coverage'] == .5
     assert trainer.model_accepts_loss_kwargs is False
     assert trainer.prediction_step(model, inputs, True)[1:] == (None, None)
+
+
+def test_old_checkpoint_objective_resumes_with_new_defaults(local_runner):
+    runner = local_runner
+    joint.run_joint_training(runner.config)
+    output = Path(runner.config['training']['output_dir'])
+    checkpoint = output / 'checkpoint-1'
+    # Emulate a checkpoint written before head_type and score_weight existed.
+    for directory in (output, checkpoint):
+        for filename in ('resolved_config.json', 'config.json', 'joint_manifest.json'):
+            path = directory / filename
+            if not path.exists():
+                continue
+            saved = json.loads(path.read_text())
+            objectives = [saved.get('objective', {}), saved.get('judge_config', {}),
+                          saved.get('resolved_config', {}).get('objective', {})]
+            for objective in objectives:
+                objective.pop('head_type', None)
+                objective.pop('score_weight', None)
+            path.write_text(json.dumps(saved))
+    runner.config['training']['max_steps'] = 2
+    runner.config['objective'] = {'head_type': 'regression', 'score_weight': 1.0}
+    result = joint.run_joint_training(runner.config, str(checkpoint))
+    assert result['optimizer_step'] == 2
+
+
+@pytest.mark.parametrize('previous,changed', [
+    ({'head_type': 'regression'}, {'head_type': 'classification'}),
+    ({'head_type': 'classification'}, {'head_type': 'regression'}),
+    ({'score_weight': 1.0}, {'score_weight': 2.0}),
+])
+def test_resume_rejects_score_objective_change_before_loading(local_runner, previous, changed):
+    runner = local_runner
+    runner.config['objective'] = previous
+    joint.run_joint_training(runner.config)
+    checkpoint = Path(runner.config['training']['output_dir']) / 'checkpoint-1'
+    runner.model_loader.reset_mock()
+    runner.config['objective'] = changed
+    with pytest.raises(ValueError, match='objective'):
+        joint.run_joint_training(runner.config, str(checkpoint))
+    runner.model_loader.assert_not_called()
 
 
 def test_mps_bfloat16_weights_do_not_enable_trainer_bf16(local_runner, monkeypatch):
