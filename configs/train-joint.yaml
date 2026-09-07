@@ -38,7 +38,7 @@ runtime:
   mps_memory_fraction: 0.75
 training:
   output_dir: artifacts/training/qwen3-vl-2b-joint
-  num_train_epochs: 1
+  num_train_epochs: 2
   max_steps: -1
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1

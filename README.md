@@ -23,6 +23,10 @@ keeps the configured output directory. Evaluation W&B names use
 `eval-<model>-<dataset>-<split>-<timestamp>-<random ID>` and are saved in the report.
 W&B job types distinguish `training` from `evaluation`.
 
+The default run trains for two epochs, evaluates every 100 optimizer steps, and
+evaluates again after training. With 1,456 v5 samples and effective batch size 8,
+this gives 364 updates and validation at steps 100, 200, 300, and 364.
+
 Use Python 3.11 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 Run from the repository root:
 
