@@ -19,6 +19,33 @@ def test_baseline_command_rejected(monkeypatch, capsys):
     assert "invalid choice: 'train'" in capsys.readouterr().err
 
 
+def test_training_auto_names_are_unique_and_match_output(monkeypatch):
+    run = Mock(return_value={})
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train-joint', '--data-dir',
+                                    'data/training_data/v5', '--wandb-mode', 'disabled'])
+    cli.main()
+    cli.main()
+    configs = [call.args[0] for call in run.call_args_list]
+    names = [config['wandb']['name'] for config in configs]
+    assert names[0] != names[1]
+    for config, name in zip(configs, names):
+        assert name.startswith('train-Qwen3-VL-2B-Instruct-v5-')
+        assert Path(config['training']['output_dir']).name == name
+
+
+def test_auto_name_accepts_partial_config(monkeypatch, tmp_path):
+    path = tmp_path / 'partial.yaml'
+    path.write_text('training:\n  max_steps: 2\n')
+    run = Mock(return_value={})
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train-joint', '--config', str(path)])
+    cli.main()
+    config = run.call_args.args[0]
+    assert config['wandb']['name'].startswith('train-Qwen3-VL-2B-Instruct-v2-')
+    assert config['training']['max_steps'] == 2
+
+
 def test_inspect_data_uses_data_config(monkeypatch, capsys):
     inspect = Mock(return_value={'splits': {}})
     monkeypatch.setattr(training_data, 'inspect_data', inspect)

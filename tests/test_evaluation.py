@@ -117,6 +117,8 @@ def test_wandb_logs_aggregates_without_examples(local_evaluation, monkeypatch):
     url = evaluation.log_evaluation(output / 'report.json')
     assert url == run.url and init.call_args.kwargs['job_type'] == 'evaluation'
     assert init.call_args.kwargs['project'] == 'multimodal-judge'
+    assert init.call_args.kwargs['name'] == report['run_name']
+    assert report['run_name'].startswith(f'eval-base-{data.name}-test-')
     payload = json.dumps(init.call_args.kwargs['config']) + json.dumps(run.log.call_args.args[0])
     assert all(secret not in payload for secret in ['PRIVATE_TITLE', 'PRIVATE_REASON',
                                                    'PREDICTED_PRIVATE', 'Private rubric', 'PRIVATE_RUBRIC', 'PRIVATE_REVIEWER'])
