@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--dtype", choices=["float32", "bfloat16"])
     parser.add_argument("--split", choices=["test", "validation"], default="test")
     parser.add_argument("--include-base", action="store_true")
+    parser.add_argument("--base-system-prompt", type=Path, help="Override the base evaluation prompt file")
     parser.add_argument("--max-samples", type=int)
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--wandb-project", default="multimodal-judge")
@@ -47,13 +48,25 @@ def main():
     parser.add_argument("--reasoning-rubric", type=Path)
     parser.add_argument("--reviews", type=Path)
     parser.add_argument("--reviewer")
+    parser.add_argument("--enable-llm-judge", action="store_true")
+    parser.add_argument("--judge-model", default="grok-4.6")
+    parser.add_argument("--judge-effort", choices=["none", "low", "medium", "high", "xhigh"], default="low")
+    parser.add_argument("--judge-cache-dir", type=Path, default=Path("artifacts/evaluation/judge-cache"))
     args = parser.parse_args()
     if args.command == "prepare-reasoning-reviews":
         if not all((args.report, args.reasoning_rubric, args.output_dir)):
             parser.error("prepare-reasoning-reviews requires --report, --reasoning-rubric, --output-dir")
         from .reasoning_evaluation import prepare_reasoning_report
 
-        prepare_reasoning_report(args.report, args.reasoning_rubric, args.output_dir)
+        report = prepare_reasoning_report(args.report, args.reasoning_rubric, args.output_dir)
+        if args.enable_llm_judge:
+            from .llm_judge import judge_reasoning
+            from .evaluation import log_evaluation
+
+            judge_reasoning(report, args.output_dir, args.judge_cache_dir,
+                            args.judge_model, args.judge_effort)
+            log_evaluation(args.output_dir / "report.json", args.wandb_mode or "offline",
+                           args.wandb_project, args.wandb_entity)
         return
     if args.command == "import-reasoning-reviews":
         if not all((args.report, args.reviews, args.output_dir, args.reviewer)):
@@ -88,7 +101,9 @@ def main():
             max_samples=args.max_samples, max_new_tokens=args.max_new_tokens,
             wandb_mode=args.wandb_mode or "offline", wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity, training_run_url=args.training_run_url,
-            reasoning_rubric=args.reasoning_rubric)
+            reasoning_rubric=args.reasoning_rubric, enable_llm_judge=args.enable_llm_judge,
+            judge_model=args.judge_model, judge_effort=args.judge_effort,
+            judge_cache_dir=args.judge_cache_dir, base_system_prompt=args.base_system_prompt)
         print(json.dumps(result["metrics"], indent=2))
         return
     if args.command == "judge":

@@ -12,11 +12,17 @@ from multimodal_judge.reasoning_evaluation import (
 RUBRIC = Path('configs/rubrics/reasoning-v1.yaml')
 
 
-def test_base_prompt_requests_chinese_json_and_keeps_rubric():
-    prompt = _base_prompt('Custom criterion. Complete the reasoning for the supplied rating; app.')
-    assert 'Custom criterion.' in prompt and '简体中文' in prompt
+def test_base_prompt_requests_chinese_json_and_accepts_file_override(tmp_path):
+    prompt = _base_prompt()
+    assert '简体中文' in prompt
     assert 'JSON' in prompt and 'rating' in prompt and 'reasoning' in prompt
     assert 'supplied rating' not in prompt
+    path = tmp_path / 'prompt.txt'
+    path.write_text('Custom criterion. JSON rating and reasoning.')
+    assert _base_prompt(path) == path.read_text()
+    path.write_text('  ')
+    with pytest.raises(ValueError, match='empty'):
+        _base_prompt(path)
 
 
 @pytest.fixture

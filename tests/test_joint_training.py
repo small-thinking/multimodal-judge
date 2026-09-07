@@ -83,11 +83,7 @@ def test_callback_numeric_only_global_step_and_sampled_memory(monkeypatch):
                         logs={'loss': .1, 'reasoning': 'private', 'bad': float('nan'), 'bool': True})
     for call in run.log.call_args_list:
         values = call.args[0]
-        assert values['optimizer_step'] == 9 and values['elapsed_optimizer_steps'] == 2
-        assert values['mps_sampled_tensor_bytes'] == 123
-        assert values['mps_sampled_driver_bytes'] == 456
-        assert 'reasoning' not in values and 'bad' not in values and 'bool' not in values
-        assert all(isinstance(v, (int, float)) for v in values.values())
+        assert values == {'train/loss': .1, 'optimizer_step': 9}
         assert not call.kwargs
 
 
@@ -416,3 +412,14 @@ def test_shared_validation_precedes_model_loading(local_runner, section, key, va
 def test_reject_invalid_config_structure(config):
     with pytest.raises(ValueError):
         training_config.resolve_config(config)
+
+
+def test_training_charts_separate_history_from_final_summaries():
+    assert joint.training_chart_metrics({
+        'loss': .4, 'rationale_loss': .2, 'score_loss': .1, 'learning_rate': .001,
+        'eval_loss': .5, 'eval_mae': .8, 'eval_rmse': 1.1, 'train_loss': .35,
+        'train_runtime': 100, 'total_flos': 9000, 'eval_samples': 26,
+        'eval_steps_per_second': .2, 'rationale_samples': 205,
+    }) == {'train/loss': .4, 'train/reasoning_loss': .2, 'train/score_loss': .1,
+           'train/learning_rate': .001, 'validation/loss': .5,
+           'validation/mae': .8, 'validation/rmse': 1.1}

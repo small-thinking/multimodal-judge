@@ -64,7 +64,11 @@ class EvaluationCenter:
                 raise ValueError('Invalid W&B mode')
             if type(options.get('include_base', False)) is not bool:
                 raise ValueError('include_base must be boolean')
+            if type(options.get('enable_llm_judge', False)) is not bool:
+                raise ValueError('enable_llm_judge must be boolean')
             rubric = options.get('reasoning_rubric')
+            if options.get('enable_llm_judge') and not rubric:
+                raise ValueError('Select a rubric to enable LLM judge')
             if rubric and rubric not in catalog['rubrics']:
                 raise ValueError('Select a rubric from the catalog')
             run_id = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
@@ -76,6 +80,8 @@ class EvaluationCenter:
                        '--wandb-mode', options['wandb_mode']]
             if options.get('include_base'):
                 command.append('--include-base')
+            if options.get('enable_llm_judge'):
+                command.append('--enable-llm-judge')
             if rubric:
                 command.extend(['--reasoning-rubric', rubric])
             log_path = self.output / (run_id + '.log')
