@@ -2,10 +2,12 @@
 
 import copy
 import importlib
+import hashlib
 import json
 import math
 import re
 import time
+import uuid
 from pathlib import Path
 
 import torch
@@ -71,13 +73,18 @@ def sampled_memory_metrics(device):
 
 def training_chart_metrics(logs):
     names = {'loss': 'loss', 'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
-             'learning_rate': 'learning_rate', 'grad_norm': 'grad_norm'}
+             'learning_rate': 'learning_rate', 'grad_norm': 'grad_norm',
+             'rationale_coverage': 'reasoning_coverage'}
     result = {}
     for key, value in numeric_metrics(logs).items():
         if key.startswith('eval_'):
             name = key.removeprefix('eval_')
-            if name in ('loss', 'mae', 'rmse', 'accuracy', 'within_one'):
-                result['validation/' + name] = value
+            validation_names = {'loss': 'loss', 'mae': 'mae', 'rmse': 'rmse',
+                                'accuracy': 'accuracy', 'within_one': 'within_one',
+                                'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
+                                'rationale_coverage': 'reasoning_coverage'}
+            if name in validation_names:
+                result['validation/' + validation_names[name]] = value
         elif key in names:
             result['train/' + names[key]] = value
     return result
@@ -146,7 +153,53 @@ class JointTrainer(Trainer):
         self._eval_totals = _LossTotals()
         output = super().evaluation_loop(*args, metric_key_prefix=metric_key_prefix, **kwargs)
         output.metrics.update(self._eval_totals.metrics(metric_key_prefix + '_'))
+        dataloader = args[0] if args else kwargs.get('dataloader')
+        if metric_key_prefix == 'eval':
+            self._save_validation_residuals(output, dataloader)
         return output
+
+    def _save_validation_residuals(self, output, dataloader):
+        """Persist numeric residuals from the existing ordered, single-process evaluation."""
+        import numpy as np
+        from torch.utils.data import SequentialSampler
+        from .training_data import JsonlScoreDataset
+
+        dataset = getattr(dataloader, 'dataset', None)
+        sampler = getattr(dataloader, 'sampler', None)
+        batch_sampler = getattr(dataloader, 'batch_sampler', None)
+        ordered = (isinstance(sampler, SequentialSampler)
+                   or isinstance(getattr(batch_sampler, 'sampler', None), SequentialSampler))
+        if (not isinstance(dataset, JsonlScoreDataset) or not ordered
+                or self.args.world_size != 1 or not self.is_world_process_zero()
+                or output.predictions is None or output.label_ids is None):
+            return
+        scores = np.asarray(output.predictions, dtype=np.float64).reshape(-1)
+        targets = np.asarray(output.label_ids, dtype=np.float64).reshape(-1)
+        if (len(scores) != len(dataset) or scores.shape != targets.shape
+                or not np.isfinite(scores).all() or not np.isfinite(targets).all()):
+            raise ValueError('Validation residuals must align with every dataset row')
+        # Include selected offsets: max_eval_samples can select a prefix of the same file.
+        digest = hashlib.sha256()
+        with dataset.path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        digest.update(json.dumps(dataset.offsets).encode())
+        destination = Path(self.args.output_dir) / 'validation'
+        destination.mkdir(parents=True, exist_ok=True)
+        stem = f'step-{self.state.global_step}-{uuid.uuid4().hex[:12]}'
+        errors = scores - targets
+        with (destination / f'{stem}.jsonl').open('x') as handle:
+            for index, (score, target, error) in enumerate(zip(scores, targets, errors)):
+                handle.write(json.dumps(dict(row_index=index, prediction=float(score),
+                    target=float(target), signed_error=float(error), absolute_error=float(abs(error)),
+                    squared_error=float(error ** 2)), allow_nan=False) + '\n')
+        summary = dict(schema_version=1, optimizer_step=self.state.global_step,
+                       dataset_fingerprint=digest.hexdigest(),
+                       fingerprint_method='sha256(jsonl_bytes + json_selected_offsets)',
+                       row_index_definition='zero-based dataset order', count=len(scores),
+                       mae=float(np.abs(errors).mean()), rmse=float(np.sqrt((errors ** 2).mean())))
+        with (destination / f'{stem}.summary.json').open('x') as handle:
+            handle.write(json.dumps(summary, indent=2, allow_nan=False) + '\n')
 
     def log(self, logs, *args, **kwargs):
         if 'loss' in logs:

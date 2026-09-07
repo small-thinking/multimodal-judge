@@ -318,6 +318,16 @@ accuracy and coverage under `evaluation/*`, plus rubric means and coverage under
 The old `train_loss` was one final average; `train/loss` is the step time series.
 Existing W&B runs keep their historical charts; this change applies to new runs.
 
+Validation also logs `validation/score_loss`, `validation/reasoning_loss`, and
+`validation/reasoning_coverage`; `train/reasoning_coverage` shows how much of each
+training interval has rationale supervision. The combined loss can improve while
+rating errors worsen, so compare the components and MAE/RMSE separately.
+Each ordered single-process validation on a JSONL dataset saves numeric per-row
+predictions, targets, and residuals in the run's `validation/step-<N>-<unique>.jsonl`,
+with a companion summary containing a dataset fingerprint and MAE/RMSE. Row indices
+refer to zero-based dataset order. These files remain local; no sample content is
+uploaded to W&B. Repeated evaluations at the same step get separate files.
+
 Base evaluation reads `src/multimodal_judge/prompts/base-evaluation.txt` by default.
 Edit that file, or pass `--base-system-prompt path/to/prompt.txt` to `evaluate`.
 This is the complete base system prompt, independent of the checkpoint's training

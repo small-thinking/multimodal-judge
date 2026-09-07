@@ -423,3 +423,56 @@ def test_training_charts_separate_history_from_final_summaries():
     }) == {'train/loss': .4, 'train/reasoning_loss': .2, 'train/score_loss': .1,
            'train/learning_rate': .001, 'validation/loss': .5,
            'validation/mae': .8, 'validation/rmse': 1.1}
+
+
+def test_validation_components_and_coverage_are_scalar_charts():
+    assert joint.training_chart_metrics({
+        'eval_score_loss': .01, 'eval_rationale_loss': 2.5,
+        'eval_rationale_coverage': .8, 'rationale_coverage': .25,
+        'eval_reasoning': 'private', 'eval_rationale_tokens': 12,
+    }) == {'validation/score_loss': .01, 'validation/reasoning_loss': 2.5,
+           'validation/reasoning_coverage': .8, 'train/reasoning_coverage': .25}
+
+
+def test_validation_residuals_reuse_ordered_loop_predictions(tmp_path, monkeypatch):
+    from torch.utils.data import DataLoader
+    from transformers.trainer_utils import EvalLoopOutput
+    from multimodal_judge.joint_data import JointScoreDataset
+
+    source = tmp_path / 'validation.jsonl'
+    source.write_text('{"text":"private one"}\n{"text":"private two"}\n')
+    dataset = JointScoreDataset(source)
+    from accelerate import Accelerator
+    loader = Accelerator(cpu=True).prepare_data_loader(DataLoader(dataset))
+    trainer = object.__new__(joint.JointTrainer)
+    trainer.args = SimpleNamespace(output_dir=str(tmp_path / 'run'), world_size=1)
+    trainer.state = SimpleNamespace(global_step=100)
+    monkeypatch.setattr(trainer, 'is_world_process_zero', lambda: True)
+    output = EvalLoopOutput(predictions=np.array([[8.], [2.]]), label_ids=np.array([5., 3.]),
+                           metrics={}, num_samples=2)
+    parent_loop = Mock(return_value=output)
+    monkeypatch.setattr(joint.Trainer, 'evaluation_loop', parent_loop)
+    for _ in range(2):
+        assert trainer.evaluation_loop(loader, description='Evaluation') is output
+    assert parent_loop.call_count == 2
+    files = list((tmp_path / 'run' / 'validation').glob('*.jsonl'))
+    assert len(files) == 2  # Final evaluation can repeat the last scheduled step.
+    rows = [json.loads(line) for line in files[0].read_text().splitlines()]
+    assert rows == [dict(row_index=0, prediction=8., target=5., signed_error=3.,
+                         absolute_error=3., squared_error=9.),
+                    dict(row_index=1, prediction=2., target=3., signed_error=-1.,
+                         absolute_error=1., squared_error=1.)]
+    summaries = [json.loads(path.read_text()) for path in files[0].parent.glob('*.summary.json')]
+    assert summaries[0]['mae'] == 2.
+    assert summaries[0]['rmse'] == pytest.approx(5 ** .5)
+    assert summaries[0]['dataset_fingerprint'] == summaries[1]['dataset_fingerprint']
+    assert 'private' not in files[0].read_text()
+    trainer.evaluation_loop(loader, description='Prediction', metric_key_prefix='test')
+    parent_loop.return_value = output._replace(predictions=None, label_ids=None)
+    trainer.evaluation_loop(loader, description='Evaluation')
+    parent_loop.return_value = output
+    trainer.evaluation_loop(DataLoader(dataset, shuffle=True), description='Evaluation')
+    assert len(list(files[0].parent.glob('*.jsonl'))) == 2
+    parent_loop.return_value = output._replace(predictions=np.array([[1.]]))
+    with pytest.raises(ValueError, match='align'):
+        trainer.evaluation_loop(loader, description='Evaluation')
