@@ -17,22 +17,28 @@ JOINT_INSTRUCTION = (
 )
 
 
-def joint_messages(text: str) -> list[dict]:
+def joint_messages(text: str, system_prompt: str = "") -> list[dict]:
     """Build fresh user messages for training and inference."""
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text must be a nonempty string")
-    return [{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": JOINT_INSTRUCTION + text},
+    if not isinstance(system_prompt, str):
+        raise ValueError("system_prompt must be a string")
+    messages = []
+    if system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+    instruction = "Assess the following image and text.\n\n" if system_prompt.strip() else JOINT_INSTRUCTION
+    return messages + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": instruction + text},
     ]}]
 
 
-def reasoning_prefix(processor, text: str, score: float) -> str:
+def reasoning_prefix(processor, text: str, score: float, system_prompt: str = "") -> str:
     """Render a generation prefix conditioned on a clipped, half-up rounded score."""
     if isinstance(score, bool) or not isinstance(score, Real) or not math.isfinite(score):
         raise ValueError("score must be a finite number")
     integer = math.floor(min(9, max(0, score)) + 0.5)
     prefix = processor.apply_chat_template(
-        joint_messages(text), tokenize=False, add_generation_prompt=True)
+        joint_messages(text, system_prompt), tokenize=False, add_generation_prompt=True)
     return prefix + f"Score: {integer}\nReasoning:\n"
 
 
@@ -68,7 +74,10 @@ class JointScoreCollator:
     remain prefix-only. Oversize vision-expanded sequences fail without truncation.
     """
 
-    def __init__(self, processor, max_length=1024, max_reasoning_tokens=128):
+    def __init__(self, processor, max_length=1024, max_reasoning_tokens=128, system_prompt=""):
+        if not isinstance(system_prompt, str):
+            raise ValueError("system_prompt must be a string")
+        self.system_prompt = system_prompt
         for name, value in (("max_length", max_length),
                             ("max_reasoning_tokens", max_reasoning_tokens)):
             if type(value) is not int or value <= 0:
@@ -106,7 +115,7 @@ class JointScoreCollator:
             if not isinstance(example.get("image"), Image.Image):
                 raise ValueError("image must be a PIL image")
             prefix = processor.apply_chat_template(
-                joint_messages(example.get("text")), tokenize=False, add_generation_prompt=True)
+                joint_messages(example.get("text"), self.system_prompt), tokenize=False, add_generation_prompt=True)
             reason = _reasoning(example.get("reasoning"))
             conditioned = prefix
             full = prefix
@@ -114,7 +123,7 @@ class JointScoreCollator:
                 reason = self._bounded_reasoning(reason)
                 if not processor.tokenizer.eos_token or processor.tokenizer.eos_token_id is None:
                     raise ValueError("Processor tokenizer must define EOS for rationale supervision")
-                conditioned = reasoning_prefix(processor, example["text"], score)
+                conditioned = reasoning_prefix(processor, example["text"], score, self.system_prompt)
                 full = conditioned + reason + processor.tokenizer.eos_token
             prefixes.append(prefix)
             conditioning.append(conditioned)

@@ -37,8 +37,9 @@ class Processor:
 
     def apply_chat_template(self, messages, tokenize, add_generation_prompt):
         assert tokenize is False and add_generation_prompt is True
-        assert messages[0]["content"][0] == {"type": "image"}
-        return "<image>" + messages[0]["content"][1]["text"] + "|assistant|"
+        system = messages[0]["content"] if messages[0]["role"] == "system" else ""
+        assert messages[-1]["content"][0] == {"type": "image"}
+        return system + "<image>" + messages[-1]["content"][1]["text"] + "|assistant|"
 
     def __call__(self, *, text, images, padding, truncation, return_tensors):
         assert padding is True and truncation is False and return_tensors == "pt"
@@ -227,3 +228,18 @@ def test_real_processor_expanded_boundaries_and_bounded_unicode():
             [dict(rows[0], reasoning=reason)])
         assert 1 < (bounded["labels"] != -100).sum() <= 4
         assert bounded["input_ids"][0, -1] == processor.tokenizer.eos_token_id
+
+
+def test_system_prompt_is_separate_and_not_supervised():
+    system = "Use this rubric.\nOnly assess the title and image."
+    messages = joint_messages("Synthetic title", system)
+    assert messages[0] == {"role": "system", "content": system}
+    assert messages[1]["role"] == "user"
+    assert system not in messages[1]["content"][1]["text"]
+    assert len(joint_messages("Synthetic title")) == 1
+    processor = Processor()
+    batch = JointScoreCollator(processor, system_prompt=system)(examples())
+    assert all(text.startswith(system) for call in processor.calls for text in call)
+    assert targets(processor, batch) == "Clear image.~"
+    for i, position in enumerate(batch["score_positions"]):
+        assert (batch["labels"][i, :position + 1] == -100).all()

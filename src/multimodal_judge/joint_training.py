@@ -158,7 +158,7 @@ def _check_mps_bfloat16():
 
 
 def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens=128,
-                  device='cpu'):
+                  device='cpu', system_prompt=''):
     """Score the input, then generate a rationale conditioned on that prediction."""
     from .joint_data import joint_messages, reasoning_prefix
 
@@ -176,7 +176,7 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
     model.eval()
     try:
         with torch.inference_mode():
-            prompt = processor.apply_chat_template(joint_messages(text), tokenize=False,
+            prompt = processor.apply_chat_template(joint_messages(text, system_prompt), tokenize=False,
                                                    add_generation_prompt=True)
             batch = encode(prompt)
             positions = torch.tensor([batch['input_ids'].shape[-1] - 1],
@@ -186,7 +186,7 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
             if not math.isfinite(score):
                 raise ValueError('Model produced a nonfinite score')
             del outputs, batch
-            batch = encode(reasoning_prefix(processor, text, score))
+            batch = encode(reasoning_prefix(processor, text, score, system_prompt))
             length = batch['input_ids'].shape[-1]
             generated = model.generate(**batch, do_sample=False, num_beams=1,
                                        max_new_tokens=max_new_tokens, use_cache=True)
@@ -236,6 +236,8 @@ def _validate_paths(resolved, resume):
             saved_config = checkpoint.parent / 'resolved_config.json'
         if saved_config.is_file():
             previous = json.loads(saved_config.read_text())
+            if previous.get("prompt", {"system": ""}) != resolved["prompt"]:
+                raise ValueError("Resume prompt configuration differs from saved run")
             for section in ('model', 'objective', 'lora'):
                 if previous.get(section) != resolved[section]:
                     raise ValueError(f'Resume {section} configuration differs from saved run')
@@ -375,7 +377,8 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
         }
         model.config.use_cache = False
         collator = JointScoreCollator(processor, max_length=data["max_length"],
-                                     max_reasoning_tokens=data["max_reasoning_tokens"])
+                                     max_reasoning_tokens=data["max_reasoning_tokens"],
+                                     system_prompt=resolved["prompt"]["system"])
         trainer = JointTrainer(model=model, args=args, joint_manifest=manifest,
                           train_dataset=train_dataset,
                           eval_dataset=eval_dataset if do_eval else None,
@@ -391,7 +394,8 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
             predictions, references = [], []
             for record in eval_dataset:
                 prediction = predict_joint(model, processor, record["image"], record["text"],
-                                           data["max_length"], training["max_new_tokens"], args.device)
+                                           data["max_length"], training["max_new_tokens"], args.device,
+                                           system_prompt=resolved["prompt"]["system"])
                 predictions.append(prediction["score"])
                 references.append(record["score"])
                 # Reasoning is deliberately discarded, never serialized or sent to W&B.

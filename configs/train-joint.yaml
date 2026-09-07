@@ -1,3 +1,11 @@
+prompt:
+  system: |-
+    You are a rating assistant. You will receive an image and its corresponding text description.
+    Assess them together according to the provided scoring criteria. Give a concise explanation
+    supported by the image and text; do not invent missing details.
+    The final response is a JSON object with exactly two fields: "reasoning" (a string) and
+    "rating" (a number from 0 to 9). Complete the reasoning for the supplied rating;
+    the application assembles the final JSON response.
 # Run from the repository root. Joint regression + bounded rationale SFT.
 model:
   name_or_path: Qwen/Qwen3-VL-2B-Instruct

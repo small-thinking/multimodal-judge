@@ -19,6 +19,24 @@ uv run --no-sync multimodal-judge train-joint --config configs/train-joint.yaml 
   --max-steps 2 --output-dir artifacts/training/local-smoke
 ```
 
+The config includes a general English rating-assistant system prompt. Edit it
+in `configs/train-joint.yaml` to add your scoring criteria:
+
+```yaml
+prompt:
+  system: |
+    Evaluate the supplied title and image together.
+    Follow the scoring rubric below.
+```
+
+Put your actual scoring rubric in this field. It is sent as a separate `system`
+message, with the title/image in the `user` message.
+The default prompt describes the output contract: `judge` returns exactly
+`{"reasoning": "...", "rating": 7.2}`. The scoring head supplies the number; the
+application JSON-encodes it with the generated rationale. Empty text omits the system message. Training, evaluation and `judge` use the
+same prompt saved in the checkpoint; resume rejects a changed prompt. Older
+checkpoints without this field keep their original behavior.
+
 The first training run downloads the model. On macOS, the `cpu` extra installs
 PyTorch with native MPS support; device selection is automatic. **Use native uv
 for the Mac GPU.** Docker on Mac runs this project on CPU.

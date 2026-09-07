@@ -6,6 +6,7 @@ import re
 
 
 _DEFAULTS = {
+    "prompt": {"system": ""},
     "model": {"name_or_path": "Qwen/Qwen3-VL-2B-Instruct", "min_pixels": 4096,
               "max_pixels": 65536, "dtype": "bfloat16", "attn_implementation": "sdpa"},
     "data": {"directory": "data/training_data/v2", "train_file": "train.jsonl",
@@ -47,6 +48,8 @@ def resolve_config(config):
         if not isinstance(values, dict) or values.keys() - defaults[section].keys():
             raise ValueError(f"Invalid or unknown settings in {section}")
         resolved[section].update(copy.deepcopy(values))
+    if not isinstance(resolved["prompt"]["system"], str):
+        raise ValueError("prompt.system must be a string")
     for section, keys in {
         "model": ["name_or_path", "attn_implementation"],
         "data": ["directory", "train_file", "validation_file"],

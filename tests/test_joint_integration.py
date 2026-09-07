@@ -48,6 +48,7 @@ def test_joint_training_reload_and_inference(tmp_path):
             "reasoning": f"The image shows a {color} square.",
         }) + "\n")
     settings = yaml.safe_load(Path("configs/train-joint.yaml").read_text())
+    settings["prompt"] = {"system": "Evaluate the title and image with the supplied rubric."}
     settings["model"]["name_or_path"] = str(base)
     settings["model"]["dtype"] = os.environ.get("MMJUDGE_TEST_DTYPE", "float32")
     settings["runtime"]["device"] = os.environ.get("MMJUDGE_TEST_DEVICE", "cpu")
@@ -73,7 +74,7 @@ def test_joint_training_reload_and_inference(tmp_path):
         saved = next(value for key, value in weights.items() if key.endswith(f"score_head.{suffix}"))
         torch.testing.assert_close(getattr(head, suffix).detach().cpu(), saved, rtol=0, atol=0)
     record = JointScoreDataset(data / "validation.jsonl")[0]
-    collator = JointScoreCollator(processor)
+    collator = JointScoreCollator(processor, system_prompt=settings["prompt"]["system"])
     first = collator([record])
     second = collator([{**record, "score": 1, "reasoning": "A completely different rationale."}])
     with torch.no_grad():
@@ -82,7 +83,7 @@ def test_joint_training_reload_and_inference(tmp_path):
     torch.testing.assert_close(a, b, atol=0.005 if dtype == torch.bfloat16 else 1e-5, rtol=0)
     assert abs(a.item() - 7) == pytest.approx(metrics["eval_mae"], abs=0.005)
     result = predict_joint(restored, processor, record["image"], record["text"],
-                           max_new_tokens=2, device=device)
+                           max_new_tokens=2, device=device, system_prompt=settings["prompt"]["system"])
     assert 0 <= result["score"] <= 9 and isinstance(result["reasoning"], str)
     # Independent CPU process loads only the saved manifest + base + adapter/head.
     cli = Path(sys.executable).with_name("multimodal-judge")
@@ -93,10 +94,10 @@ def test_joint_training_reload_and_inference(tmp_path):
         check=True, capture_output=True, text=True, timeout=90,
     )
     saved_result = json.loads(reply.stdout)
-    assert 0 <= saved_result["score"] <= 9
-    assert saved_result["score_scale"] == [0, 9]
+    assert 0 <= saved_result["rating"] <= 9
+    assert set(saved_result) == {"rating", "reasoning"}
     if dtype == torch.float32:
-        assert saved_result["score"] == pytest.approx(result["score"], abs=1e-5)
+        assert saved_result["rating"] == pytest.approx(result["score"], abs=1e-5)
     del restored
     if device == "mps":
         torch.mps.empty_cache()

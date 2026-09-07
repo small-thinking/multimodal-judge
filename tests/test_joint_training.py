@@ -23,7 +23,8 @@ def test_config_defaults_match_yaml_and_are_independent():
     before = copy.deepcopy(config)
     defaults = joint._resolve_config({})
     resolved = joint._resolve_config(config)
-    assert resolved == defaults
+    assert resolved["prompt"] == config["prompt"]
+    assert joint._resolve_config({"prompt": config["prompt"]}) == resolved
     assert config == before
     resolved['lora']['target_modules'].append('k_proj')
     resolved['objective']['rationale_weight'] = 1
@@ -37,6 +38,7 @@ def test_config_defaults_match_yaml_and_are_independent():
     ('objective', 'ce_chunk_size', True), ('objective', 'rationale_weight', float('nan')),
     ('data', 'max_reasoning_tokens', 0), ('runtime', 'mps_memory_fraction', 1.1),
     ('runtime', 'mps_memory_fraction', 0), ('training', 'max_steps', 0),
+    ('prompt', 'system', None), ('prompt', 'system', 42),
     ('model', 'trust_remote_code', True), ('lora', 'modules_to_save', []),
 ])
 def test_invalid_config(section, key, value):
@@ -101,9 +103,10 @@ def test_inference_uses_predicted_score_and_restores_mode(monkeypatch):
     model = Mock(training=True)
     model.return_value = SimpleNamespace(logits=torch.tensor([[6.75]]))
     model.generate.return_value = torch.tensor([[1, 2, 3, 8, 9]])
-    result = joint.predict_joint(model, processor, object(), 'synthetic')
+    result = joint.predict_joint(model, processor, object(), 'synthetic',
+                                 system_prompt='Use the rubric.')
     assert result == {'score': 6.75, 'reasoning': 'local rationale'}
-    assert helper.call_args.args[2] == 6.75
+    assert helper.call_args.args[2:] == (6.75, 'Use the rubric.')
     assert model.call_args.kwargs['score_positions'].tolist() == [2]
     assert 'scores' not in model.call_args.kwargs and 'labels' not in model.call_args.kwargs
     assert 'score_positions' not in model.generate.call_args.kwargs
@@ -204,6 +207,7 @@ def test_native_trainer_head_adapter_save_and_real_resume(local_runner):
     from safetensors.torch import load_file
     runner = local_runner
     config = runner.config
+    config['prompt'] = {'system': 'Use the saved rubric.'}
     (Path(config['data']['directory']) / 'validation.jsonl').write_text('{}\n')
     result = joint.run_joint_training(config)
     assert result['optimizer_step'] == 1
@@ -223,6 +227,11 @@ def test_native_trainer_head_adapter_save_and_real_resume(local_runner):
     for loader in (runner.processor_loader, runner.config_loader, runner.model_loader):
         assert loader.call_args.kwargs['trust_remote_code'] is False
     # Native Trainer loads model, optimizer, scheduler, RNG and advances the saved step.
+    assert json.loads((output / 'joint_manifest.json').read_text())['resolved_config']['prompt'] == config['prompt']
+    config['prompt']['system'] = 'A changed rubric'
+    with pytest.raises(ValueError, match='Resume prompt'):
+        joint.run_joint_training(config, str(checkpoint))
+    config['prompt']['system'] = 'Use the saved rubric.'
     config['training']['max_steps'] = 2
     result = joint.run_joint_training(config, str(checkpoint))
     assert result['optimizer_step'] == 2
