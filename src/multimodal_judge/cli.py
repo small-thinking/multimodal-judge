@@ -152,6 +152,17 @@ def main():
         return
     if args.command == "train-joint":
         from .joint_training import run_joint_training
+        from .run_naming import make_run_name
+        from .training_config import resolve_config
+
+        if args.output_dir is None and args.resume_from_checkpoint is None:
+            resolved = resolve_config(config)
+            name = make_run_name('train', resolved['model']['name_or_path'],
+                                 resolved['data']['directory'])
+            config.setdefault('training', {})['output_dir'] = str(
+                Path(resolved['training']['output_dir']).parent / name)
+            if not config.get('wandb', {}).get('name'):
+                config.setdefault('wandb', {})['name'] = name
 
         metrics = run_joint_training(config, resume_from_checkpoint=args.resume_from_checkpoint)
         print(json.dumps(metrics, indent=2))

@@ -271,6 +271,10 @@ def _validate_paths(resolved, resume):
 def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
     """Train and save locally, returning aggregate metrics (single process only)."""
     resolved = _resolve_config(config)
+    if not resolved['wandb']['name']:
+        from .run_naming import make_run_name
+        resolved['wandb']['name'] = make_run_name(
+            'train', resolved['model']['name_or_path'], resolved['data']['directory'])
     model_config, data, training = (resolved[key] for key in ("model", "data", "training"))
     paths, output, resume_from_checkpoint = _validate_paths(resolved, resume_from_checkpoint)
 
@@ -342,7 +346,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
     try:
         if wandb is not None:
             # Log scalars only; leave data and model artifacts local.
-            run = wandb.init(**resolved["wandb"], config=resolved, dir=str(output),
+            run = wandb.init(**resolved["wandb"], job_type='training', config=resolved, dir=str(output),
                              settings=wandb.Settings(disable_code=True, disable_git=True,
                                                      console="off"))
             run.define_metric("optimizer_step", hidden=True)

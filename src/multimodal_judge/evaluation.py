@@ -36,8 +36,13 @@ def log_evaluation(report_path, mode='online', project='multimodal-judge', entit
     import wandb
 
     metadata = {'split': report['split']}
+    from .run_naming import make_run_name
+    name = report.get('run_name') or make_run_name(
+        'eval', report.get('model', {}).get('name', 'model'),
+        report.get('data_dir', path.parent.name), report['split'])
+    report['run_name'] = name
     run = wandb.init(project=project, entity=entity, mode=mode, job_type='evaluation',
-                     name=path.parent.name, config=metadata, dir=str(path.parent),
+                     name=name, config=metadata, dir=str(path.parent),
                      settings=wandb.Settings(disable_code=True, disable_git=True, console='off'))
     exit_code = 1
     try:
@@ -153,7 +158,10 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
     if not training_run_url and readback.is_file():
         training_run_url = json.loads(readback.read_text()).get('url')
     limit = max_new_tokens or config['training']['max_new_tokens']
+    from .run_naming import make_run_name
     report = {'schema_version': 1, 'created_at': datetime.now(timezone.utc).isoformat(),
+              'run_name': make_run_name('eval', manifest['base_model_name_or_path'], data_dir, split),
+              'data_dir': str(data_dir),
               'checkpoint': str(checkpoint), 'checkpoint_sha256': fingerprint.hexdigest(),
               'dataset_sha256': {split: file_hash(dataset_path),
                                  'train': file_hash(data_dir / 'train.jsonl')},

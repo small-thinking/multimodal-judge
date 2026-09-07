@@ -9,6 +9,20 @@ run `git lfs install --local && git lfs pull` to download documentation images.
 
 ## Local training (Mac)
 
+For a full run on dataset v5 with online W&B tracking:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge train-joint --config configs/train-joint.yaml --data-dir data/training_data/v5 --wandb-mode online
+```
+
+Without `--output-dir`, new training runs create a unique directory alongside the
+configured output directory. The default W&B name matches it:
+`train-<model>-<dataset>-<local timestamp with timezone>-<random ID>`.
+Explicit output directories and configured W&B names remain supported; resume
+keeps the configured output directory. Evaluation W&B names use
+`eval-<model>-<dataset>-<split>-<timestamp>-<random ID>` and are saved in the report.
+W&B job types distinguish `training` from `evaluation`.
+
 Use Python 3.11 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 Run from the repository root:
 
