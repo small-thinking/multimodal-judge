@@ -106,6 +106,11 @@ def test_wandb_logs_aggregates_without_examples(local_evaluation, monkeypatch):
 
     checkpoint, data, output, _ = local_evaluation
     evaluation.run_evaluation(checkpoint, data, output, device='cpu', wandb_mode='disabled')
+    path = output / 'report.json'
+    report = json.loads(path.read_text())
+    report['reasoning_evaluation'] = {'metrics': {'joint': {'visual_accuracy_mean': 2}},
+                                      'rubric': 'PRIVATE_RUBRIC', 'reviewer': 'PRIVATE_REVIEWER'}
+    path.write_text(json.dumps(report))
     run = Mock(url='https://wandb.ai/test/project/runs/eval', id='eval')
     init = Mock(return_value=run)
     monkeypatch.setattr(wandb, 'init', init)
@@ -114,8 +119,9 @@ def test_wandb_logs_aggregates_without_examples(local_evaluation, monkeypatch):
     assert init.call_args.kwargs['project'] == 'multimodal-judge'
     payload = json.dumps(init.call_args.kwargs['config']) + json.dumps(run.log.call_args.args[0])
     assert all(secret not in payload for secret in ['PRIVATE_TITLE', 'PRIVATE_REASON',
-                                                   'PREDICTED_PRIVATE', 'Private rubric'])
+                                                   'PREDICTED_PRIVATE', 'Private rubric', 'PRIVATE_RUBRIC', 'PRIVATE_REVIEWER'])
     assert run.log.call_args.args[0]['evaluation/joint/rmse'] == pytest.approx(math.sqrt(2.5))
+    assert run.log.call_args.args[0]['reasoning/joint/visual_accuracy_mean'] == 2
     assert init.call_args.kwargs['config'] == {'split': 'test'}
     run.finish.assert_called_once_with(exit_code=0)
     with pytest.raises(ValueError, match='duplicate'):

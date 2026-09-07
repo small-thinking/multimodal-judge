@@ -27,7 +27,10 @@ class EvaluationCenter:
             return sorted({str(p.parent.relative_to(self.root)) for p in self.root.glob(pattern)
                            if p.resolve().is_relative_to(self.root)})
         return {'checkpoints': directories('artifacts/training/**/joint_manifest.json'),
-                'datasets': directories('data/training_data/**/train.jsonl')}
+                'datasets': directories('data/training_data/**/train.jsonl'),
+                'rubrics': sorted(str(p.relative_to(self.root))
+                                  for p in (self.root / 'configs/rubrics').glob('*.yaml')
+                                  if p.resolve().is_relative_to(self.root))}
 
     def state(self):
         runs = []
@@ -61,6 +64,9 @@ class EvaluationCenter:
                 raise ValueError('Invalid W&B mode')
             if type(options.get('include_base', False)) is not bool:
                 raise ValueError('include_base must be boolean')
+            rubric = options.get('reasoning_rubric')
+            if rubric and rubric not in catalog['rubrics']:
+                raise ValueError('Select a rubric from the catalog')
             run_id = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
             destination = self.output / run_id
             # The evaluator owns creating the run directory, so an existing run is never replaced.
@@ -70,6 +76,8 @@ class EvaluationCenter:
                        '--wandb-mode', options['wandb_mode']]
             if options.get('include_base'):
                 command.append('--include-base')
+            if rubric:
+                command.extend(['--reasoning-rubric', rubric])
             log_path = self.output / (run_id + '.log')
             with log_path.open('w') as log:
                 self.process = subprocess.Popen(command, cwd=self.root, stdout=log,

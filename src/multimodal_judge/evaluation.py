@@ -50,6 +50,8 @@ def log_evaluation(report_path, mode='online', project='multimodal-judge', entit
                 if subset:
                     values.update({f'evaluation/{method}/score_{score}/{key}': value
                                    for key, value in summarize(subset, method).items()})
+        for method, summary in report.get('reasoning_evaluation', {}).get('metrics', {}).items():
+            values.update({f'reasoning/{method}/{key}': value for key, value in summary.items()})
         run.log(values)
         run.summary.update(values)
         report['wandb_url'] = run.url if mode == 'online' else None
@@ -68,8 +70,9 @@ def _base_prompt(saved):
     marker = ' Complete the reasoning for the supplied rating;'
     if marker in saved:
         saved = saved.split(marker)[0]
-    return saved + ('\nChoose a rating from 0 to 9 yourself. Return only a JSON object with '
-                    'exactly "rating" (a number) and "reasoning" (a concise string).')
+    return saved + ('\n请自行给出 0–9 分的 rating，并用简体中文写简短的 reasoning。'
+                    '只输出一个合法 JSON 对象，恰好包含 rating（数字）和 reasoning（字符串）。'
+                    '先写 rating，再写 reasoning；不要 Markdown 或 JSON 之外的文字。')
 
 
 def _base_predict(model, processor, image, text, system, config, device, limit):
@@ -97,7 +100,7 @@ def _base_predict(model, processor, image, text, system, config, device, limit):
 def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto',
                    include_base=False, max_samples=None, max_new_tokens=None,
                    wandb_mode='offline', wandb_project='multimodal-judge', wandb_entity=None,
-                   training_run_url=None):
+                   training_run_url=None, reasoning_rubric=None):
     from tqdm import tqdm
     from .joint_data import JointScoreDataset
     from .joint_inference import load_joint_checkpoint
@@ -108,6 +111,9 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
     for name, value in [('max_samples', max_samples), ('max_new_tokens', max_new_tokens)]:
         if value is not None and (type(value) is not int or value < 1):
             raise ValueError(f'{name} must be a positive integer')
+    if reasoning_rubric is not None:
+        from .reasoning_evaluation import load_rubric
+        load_rubric(reasoning_rubric)
     checkpoint, data_dir, output = map(lambda p: Path(p).resolve(),
                                       (checkpoint, data_dir, output_dir))
     manifest = json.loads((checkpoint / 'joint_manifest.json').read_text())
@@ -173,6 +179,7 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
                     dtype=getattr(torch, config['model']['dtype']), trust_remote_code=False,
                     attn_implementation=config['model']['attn_implementation']).to(device).eval()
                 report['methods'].append('base')
+                report['base_output_policy'] = 'zh-json-v1'
                 report['base_system_prompt'] = _base_prompt(config.get('prompt', {}).get('system', ''))
             for i in tqdm(range(len(dataset)), desc=f'{split}/{method}'):
                 row = dataset[i]
@@ -222,6 +229,9 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
                     report['metrics'][method + '_base_valid'] = rating_metrics(
                         [row['target'] for row in valid],
                         [row['predictions'][method]['rating'] for row in valid])
+        if reasoning_rubric is not None:
+            from .reasoning_evaluation import prepare_reasoning_reviews
+            prepare_reasoning_reviews(report, reasoning_rubric, output)
         write_json(output / 'report.json', report)
         log_evaluation(output / 'report.json', wandb_mode, wandb_project, wandb_entity)
         write_json(output / 'progress.json', {'status': 'finished', 'completed': completed,

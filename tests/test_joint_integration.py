@@ -89,7 +89,10 @@ def test_joint_training_reload_and_inference(tmp_path):
 
     evaluation = run_evaluation(output, data, tmp_path / "evaluation", split="validation",
                                 device=device, max_new_tokens=2, include_base=True,
+                                reasoning_rubric="configs/rubrics/reasoning-v1.yaml",
                                 wandb_mode="disabled")
+    assert evaluation["reasoning_evaluation"]["metrics"]["joint"]["scored_count"] == 0
+    assert evaluation["base_output_policy"] == "zh-json-v1"
     assert evaluation["metrics"]["base"]["total_count"] == 1
     assert evaluation["metrics"]["joint"]["valid_count"] == 1
     assert evaluation["rows"][0]["predictions"]["joint"]["rating"] == pytest.approx(

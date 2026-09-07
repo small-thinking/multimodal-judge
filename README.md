@@ -225,3 +225,44 @@ synthetic image/text example repeated for five updates per run**, not the real
 8/1/1 dataset. Saved-adapter inference was also checked in a fresh process.
 This validates plumbing and short-run performance, not held-out quality or a
 10,000-example training run. See the [model notes](docs/joint-model.md).
+
+### Reasoning review (draft rubric)
+
+Rating error and explanation quality are separate. The draft
+`configs/rubrics/reasoning-v1.yaml` scores visual accuracy, grounded style description,
+fluency/repetition and inference reliability, each on **1–3** with a short Chinese
+explanation. Replace its anchors and version when your rubric is ready. Unsupported
+inferences should not earn credit; appropriate uncertainty or abstention can score well.
+
+Add `--reasoning-rubric configs/rubrics/reasoning-v1.yaml` to `evaluate`, or select the
+rubric in Evaluation Center. To prepare reviews from existing predictions without
+rerunning the model:
+
+```bash
+uv run --no-sync multimodal-judge prepare-reasoning-reviews \
+  --report artifacts/evaluation/runs/my-eval/report.json \
+  --reasoning-rubric configs/rubrics/reasoning-v1.yaml \
+  --output-dir artifacts/evaluation/runs/my-review-queue
+```
+
+`reasoning-requests.jsonl` contains local image paths, titles, candidate explanations
+and an empty JSON response template. Give a human or future multimodal judge the images
+and rubric alongside those requests. It excludes human labels and predictor names.
+No judge is configured or invoked automatically: pending/unscorable reviews have no scores.
+
+Fill `response.dimensions` with `{ "rating": 1, "reasoning": "简短依据" }` for every
+rubric dimension, retaining `review_id` and `rubric_sha256`. If review is impossible,
+use `response: { "status": "unscorable", "reason": "原因" }` instead. Import completed
+reviews into a new report and optionally log their aggregate scores:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge import-reasoning-reviews \
+  --report artifacts/evaluation/runs/my-review-queue/report.json \
+  --reviews /path/to/completed-reviews.jsonl --reviewer human-v1 \
+  --output-dir artifacts/evaluation/runs/my-reviewed --wandb-mode online
+```
+
+The page shows per-dimension results and coverage; W&B logs `reasoning/<method>/*`
+aggregates only. Rubric scores depend on the reviewer and are not ground truth. Do not
+mix reviewers or rubric versions in a comparison. New base inference explicitly asks
+for Chinese reasoning and JSON; old runs retain their original prompt and are labeled legacy.
