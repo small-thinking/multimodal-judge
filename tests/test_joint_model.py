@@ -28,9 +28,11 @@ def tiny_config(vocab_size=128):
 
 
 @pytest.fixture
-def model():
+def model(request):
     torch.manual_seed(7)
-    return JointQwen3VLForConditionalGeneration(tiny_config()).eval()
+    config = tiny_config()
+    config.judge_config['head_type'] = getattr(request, 'param', 'regression')
+    return JointQwen3VLForConditionalGeneration(config).eval()
 
 
 def batch():
@@ -114,14 +116,20 @@ def test_padding_does_not_change_scores(model):
     torch.testing.assert_close(combined[1:], single)
 
 
+@pytest.mark.parametrize('model', ['regression', 'classification'], indirect=True)
 def test_head_checkpoint_roundtrip(model, tmp_path):
+    model.config.judge_config['score_weight'] = 2.5
     model.save_pretrained(tmp_path)
     restored = JointQwen3VLForConditionalGeneration.from_pretrained(tmp_path).eval()
     with torch.no_grad():
         torch.testing.assert_close(model(**batch()).logits, restored(**batch()).logits)
     assert restored.config.judge_config["ce_chunk_size"] == 1
+    assert restored.config.judge_config['head_type'] == model.config.judge_config['head_type']
+    assert restored.config.judge_config['score_weight'] == 2.5
+    assert restored.score_head.out_features == model.score_head.out_features
 
 
+@pytest.mark.parametrize('model', ['regression', 'classification'], indirect=True)
 def test_bfloat16_base_load_preserves_fp32_head_exactly(model, tmp_path):
     with torch.no_grad():
         model.score_head.weight.fill_(0.1234567)
@@ -131,6 +139,86 @@ def test_bfloat16_base_load_preserves_fp32_head_exactly(model, tmp_path):
     assert restored.score_head.weight.dtype == torch.float32
     torch.testing.assert_close(restored.score_head.weight, model.score_head.weight, rtol=0, atol=0)
     torch.testing.assert_close(restored.score_head.bias, model.score_head.bias, rtol=0, atol=0)
+
+
+def test_legacy_model_config_keeps_regression_defaults():
+    model = JointQwen3VLForConditionalGeneration(tiny_config()).eval()
+    assert model.config.judge_config['head_type'] == 'regression'
+    assert model.config.judge_config['score_weight'] == 1.0
+    assert model.score_head.out_features == 1
+    assert model(**batch()).score_class_logits is None
+
+
+@pytest.mark.parametrize('key,value', [
+    ('head_type', 'ordinal'), ('head_type', None), ('score_weight', -1),
+    ('score_weight', float('nan')), ('score_weight', float('inf')), ('score_weight', True),
+])
+def test_direct_model_load_rejects_invalid_objective(key, value):
+    config = tiny_config()
+    config.judge_config[key] = value
+    with pytest.raises(ValueError):
+        JointQwen3VLForConditionalGeneration(config)
+
+
+@pytest.mark.parametrize('model', ['classification'], indirect=True)
+def test_classification_ce_and_expected_score_known_distribution(model):
+    # A fixed, asymmetric distribution distinguishes expectation from argmax,
+    # including the endpoints of the public 0..9 label contract.
+    probabilities = torch.tensor([.20, .05, .05, .05, .05, .05, .05, .05, .05, .40])
+    with torch.no_grad():
+        model.score_head.weight.zero_()
+        model.score_head.bias.copy_(probabilities.log())
+    data = batch()
+    data['scores'] = torch.tensor([0., 9.])
+    out = model(**data)
+    assert out.score_class_logits.shape == (2, 10)
+    torch.testing.assert_close(out.score_class_logits.softmax(-1), probabilities.expand(2, -1))
+    # sum(p[k] * k) = .05 * (1 + ... + 8) + .40 * 9 = 5.4
+    torch.testing.assert_close(out.logits, torch.full((2, 1), 5.4))
+    assert not torch.equal(out.logits[:, 0], out.score_class_logits.argmax(-1).float())
+    expected_ce = -(torch.log(torch.tensor(.20)) + torch.log(torch.tensor(.40))) / 2
+    torch.testing.assert_close(out.score_loss, expected_ce)
+    torch.testing.assert_close(out.loss, expected_ce + .1 * out.rationale_loss)
+
+
+@pytest.mark.parametrize('model', ['classification'], indirect=True)
+@pytest.mark.parametrize('bad_score', [.5, -1., 10., float('nan'), float('inf')])
+def test_classification_rejects_invalid_score_labels(model, bad_score):
+    data = batch()
+    data['scores'][0] = bad_score
+    with pytest.raises(ValueError):
+        model(**data)
+
+
+@pytest.mark.parametrize('model', ['regression', 'classification'], indirect=True)
+def test_score_weight_scales_head_and_shared_gradients(model):
+    data = batch()
+    # Isolate the score contribution to shared layers; the LM objective has
+    # a separate path and must not masquerade as scoring progress.
+    data['labels'][:] = -100
+    gradients = []
+    losses = []
+    for weight in (1., 3., 0.):
+        model.zero_grad(set_to_none=True)
+        model.config.judge_config['score_weight'] = weight
+        out = model(**data)
+        out.loss.backward()
+        losses.append(out.loss.detach())
+        gradients.append((model.score_head.weight.grad.clone(),
+                          model.model.language_model.layers[0].self_attn.q_proj.weight.grad.clone()))
+    torch.testing.assert_close(losses[1], 3 * losses[0])
+    assert losses[0] > 0 and losses[2] == 0
+    for index in (0, 1):
+        assert gradients[0][index].abs().sum() > 0
+        torch.testing.assert_close(gradients[1][index], 3 * gradients[0][index], atol=1e-7, rtol=1e-4)
+        assert gradients[2][index].count_nonzero() == 0
+
+
+@pytest.mark.parametrize('model', ['regression', 'classification'], indirect=True)
+def test_weighted_objectives_keep_rationale_term_independent(model):
+    model.config.judge_config.update(score_weight=2.5, rationale_weight=.3)
+    out = model(**batch())
+    torch.testing.assert_close(out.loss, 2.5 * out.score_loss + .3 * out.rationale_loss)
 
 
 def test_rejects_supervised_prompt_and_padding_pool(model):

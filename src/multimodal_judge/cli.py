@@ -27,6 +27,10 @@ def main():
     parser.add_argument("--data-dir", type=Path, help="Directory containing split JSONL files")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--score-head", choices=["regression", "classification"],
+                        help="Training score head; inference uses the saved architecture")
+    parser.add_argument("--score-weight", type=float,
+                        help="Training multiplier for the scoring loss (default 1)")
     parser.add_argument("--wandb-mode", choices=["offline", "online", "disabled"])
     parser.add_argument("--resume-from-checkpoint", help="Trainer checkpoint directory")
     parser.add_argument("--checkpoint", type=Path, help="Saved joint adapter/head directory")
@@ -53,6 +57,10 @@ def main():
     parser.add_argument("--judge-effort", choices=["none", "low", "medium", "high", "xhigh"], default="low")
     parser.add_argument("--judge-cache-dir", type=Path, default=Path("artifacts/evaluation/judge-cache"))
     args = parser.parse_args()
+    if args.command != 'train-joint' and (
+        args.score_head is not None or args.score_weight is not None
+    ):
+        parser.error('--score-head and --score-weight are only supported for train-joint')
     if args.command == "prepare-reasoning-reviews":
         if not all((args.report, args.reasoning_rubric, args.output_dir)):
             parser.error("prepare-reasoning-reviews requires --report, --reasoning-rubric, --output-dir")
@@ -135,6 +143,8 @@ def main():
         ("data", "directory", str(args.data_dir) if args.data_dir is not None else None),
         ("training", "output_dir", str(args.output_dir) if args.output_dir is not None else None),
         ("training", "max_steps", args.max_steps),
+        ("objective", "head_type", args.score_head),
+        ("objective", "score_weight", args.score_weight),
         ("wandb", "mode", args.wandb_mode),
         ("runtime", "device", args.device),
         ("model", "dtype", args.dtype),

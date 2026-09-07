@@ -11,7 +11,8 @@ import pytest
 
 @pytest.mark.skipif(not os.environ.get("MMJUDGE_TEST_PROCESSOR"),
                     reason="Set MMJUDGE_TEST_PROCESSOR to a local Qwen3-VL processor")
-def test_joint_training_reload_and_inference(tmp_path):
+@pytest.mark.parametrize('head_type', ['regression', 'classification'])
+def test_joint_training_reload_and_inference(tmp_path, head_type):
     import torch
     import yaml
     from PIL import Image
@@ -35,7 +36,7 @@ def test_joint_training_reload_and_inference(tmp_path):
     config.eos_token_id = processor.tokenizer.eos_token_id
     config.pad_token_id = processor.tokenizer.pad_token_id
     base = tmp_path / "base"
-    # Mimic a pretrained base checkpoint with no newly introduced scalar head.
+    # Mimic a pretrained base checkpoint with no newly introduced scoring head.
     Qwen3VLForConditionalGeneration(config).save_pretrained(base)
     processor.save_pretrained(base)
     data = tmp_path / "data"
@@ -48,6 +49,7 @@ def test_joint_training_reload_and_inference(tmp_path):
             "reasoning": f"The image shows a {color} square.",
         }) + "\n")
     settings = yaml.safe_load(Path("configs/train-joint.yaml").read_text())
+    settings['objective'].update(head_type=head_type, score_weight=2.0)
     settings["prompt"] = {"system": "Evaluate the title and image with the supplied rubric."}
     settings["model"]["name_or_path"] = str(base)
     settings["model"]["dtype"] = os.environ.get("MMJUDGE_TEST_DTYPE", "float32")
@@ -57,19 +59,24 @@ def test_joint_training_reload_and_inference(tmp_path):
     settings["training"].update(output_dir=str(output), max_steps=1, save_steps=1,
                                   eval_steps=1, gradient_accumulation_steps=1,
                                   max_new_tokens=2, generate_eval=True)
-    settings["wandb"]["mode"] = "offline"
+    # Preserve the original offline-logging check for regression; classification
+    # also exercises the fully disabled path, without a W&B service dependency.
+    settings["wandb"]["mode"] = "offline" if head_type == 'regression' else 'disabled'
     metrics = run_joint_training(settings)
     assert 0 <= metrics["eval_mae"] <= 9
     assert metrics["eval_rationale_loss"] > 0
     weights = load_file(str(output / "adapter_model.safetensors"))
     assert any("score_head" in key for key in weights)
     assert any("lora_B" in key and value.abs().sum() > 0 for key, value in weights.items())
-    assert list((output / "wandb").glob("offline-run-*/run-*.wandb"))
+    if settings['wandb']['mode'] == 'offline':
+        assert list((output / "wandb").glob("offline-run-*/run-*.wandb"))
     # Fresh base + saved adapter/head must score identically across suffix changes.
     dtype = getattr(torch, settings["model"]["dtype"])
     device = settings["runtime"]["device"]
     restored, processor, _, _ = load_joint_checkpoint(output, device=device)
     head = restored.score_head.modules_to_save["default"]
+    assert head.out_features == (10 if head_type == 'classification' else 1)
+    assert restored.config.judge_config['score_weight'] == 2.0
     for suffix in ("weight", "bias"):
         saved = next(value for key, value in weights.items() if key.endswith(f"score_head.{suffix}"))
         torch.testing.assert_close(getattr(head, suffix).detach().cpu(), saved, rtol=0, atol=0)

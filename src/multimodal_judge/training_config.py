@@ -22,7 +22,8 @@ _DEFAULTS = {
                  "dataloader_num_workers": 0, "seed": 42, "generate_eval": False,
                  "max_new_tokens": 128},
     "runtime": {"device": "auto", "mps_memory_fraction": 0.75},
-    "objective": {"rationale_weight": 0.1, "huber_delta": 0.1,
+    "objective": {"head_type": "regression", "score_weight": 1.0,
+                  "rationale_weight": 0.1, "huber_delta": 0.1,
                   "score_min": 0.0, "score_max": 9.0, "ce_chunk_size": 32},
     "wandb": {"project": "multimodal-judge", "entity": None, "mode": "offline", "name": None},
 }
@@ -99,6 +100,7 @@ def resolve_config(config):
     if resolved["model"]["min_pixels"] > resolved["model"]["max_pixels"]:
         raise ValueError("model.min_pixels must not exceed max_pixels")
     for section, key, choices in (
+        ("objective", "head_type", ("regression", "classification")),
         ("model", "dtype", ("float32", "float16", "bfloat16")),
         ("model", "attn_implementation", ("eager", "sdpa", "flash_attention_2")),
         ("runtime", "device", ("auto", "cpu", "mps", "cuda")),
@@ -113,7 +115,7 @@ def resolve_config(config):
     if not 0 < fraction <= 1:
         raise ValueError('runtime.mps_memory_fraction must be in (0, 1]')
     objective = resolved['objective']
-    for key in ('rationale_weight', 'huber_delta'):
+    for key in ('score_weight', 'rationale_weight', 'huber_delta'):
         validate_number(objective[key], f'objective.{key}')
     if objective['huber_delta'] == 0:
         raise ValueError('objective.huber_delta must be positive')
