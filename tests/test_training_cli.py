@@ -55,3 +55,22 @@ def test_joint_command_preserves_overrides_and_resume(monkeypatch, capsys):
     config['wandb']['mode'] = 'disabled'
     run.assert_called_once_with(config, resume_from_checkpoint='checkpoint-1')
     assert json.loads(capsys.readouterr().out) == {'train_loss': 0.25}
+
+def test_judge_returns_rating_reasoning_json(monkeypatch, capsys, tmp_path):
+    from PIL import Image
+    from multimodal_judge import joint_inference
+
+    image = tmp_path / 'image.png'
+    Image.new('RGB', (4, 4), 'blue').save(image)
+    config = {'data': {'max_length': 1024}, 'training': {'max_new_tokens': 64},
+              'prompt': {'system': 'Use the supplied rubric.'}}
+    monkeypatch.setattr(joint_inference, 'load_joint_checkpoint',
+                        Mock(return_value=(object(), object(), 'cpu', config)))
+    reason = 'A "blue" square.\nClear shape.'
+    predict = Mock(return_value={'score': 6.75, 'reasoning': reason})
+    monkeypatch.setattr(joint_training, 'predict_joint', predict)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'judge', '--checkpoint', str(tmp_path),
+                                    '--image', str(image), '--text', 'A blue square'])
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {'rating': 6.75, 'reasoning': reason}
+    assert predict.call_args.kwargs['system_prompt'] == config['prompt']['system']

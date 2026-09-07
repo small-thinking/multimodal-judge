@@ -26,8 +26,9 @@ def joint_messages(text: str, system_prompt: str = "") -> list[dict]:
     messages = []
     if system_prompt.strip():
         messages.append({"role": "system", "content": system_prompt})
+    instruction = "Assess the following image and text.\n\n" if system_prompt.strip() else JOINT_INSTRUCTION
     return messages + [{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": JOINT_INSTRUCTION + text},
+        {"type": "image"}, {"type": "text", "text": instruction + text},
     ]}]
 
 

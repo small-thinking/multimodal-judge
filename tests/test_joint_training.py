@@ -23,7 +23,8 @@ def test_config_defaults_match_yaml_and_are_independent():
     before = copy.deepcopy(config)
     defaults = joint._resolve_config({})
     resolved = joint._resolve_config(config)
-    assert resolved == defaults
+    assert resolved["prompt"] == config["prompt"]
+    assert joint._resolve_config({"prompt": config["prompt"]}) == resolved
     assert config == before
     resolved['lora']['target_modules'].append('k_proj')
     resolved['objective']['rationale_weight'] = 1

@@ -48,7 +48,8 @@ def main():
                                config["data"]["max_length"],
                                config["training"]["max_new_tokens"], device,
                                system_prompt=config.get("prompt", {}).get("system", ""))
-        print(json.dumps({**result, "score_scale": [0, 9]}, ensure_ascii=False))
+        print(json.dumps({"reasoning": result["reasoning"], "rating": result["score"]},
+                         ensure_ascii=False, allow_nan=False))
         return
     default_configs = {"smoke": "configs/local.yaml", "inspect-data": "configs/data.yaml",
                        "train-joint": "configs/train-joint.yaml"}

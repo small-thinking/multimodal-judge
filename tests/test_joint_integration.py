@@ -94,10 +94,10 @@ def test_joint_training_reload_and_inference(tmp_path):
         check=True, capture_output=True, text=True, timeout=90,
     )
     saved_result = json.loads(reply.stdout)
-    assert 0 <= saved_result["score"] <= 9
-    assert saved_result["score_scale"] == [0, 9]
+    assert 0 <= saved_result["rating"] <= 9
+    assert set(saved_result) == {"rating", "reasoning"}
     if dtype == torch.float32:
-        assert saved_result["score"] == pytest.approx(result["score"], abs=1e-5)
+        assert saved_result["rating"] == pytest.approx(result["score"], abs=1e-5)
     del restored
     if device == "mps":
         torch.mps.empty_cache()
