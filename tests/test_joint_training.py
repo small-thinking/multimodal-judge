@@ -361,7 +361,7 @@ def test_mps_bfloat16_weights_do_not_enable_trainer_bf16(local_runner, monkeypat
 
 @pytest.mark.parametrize('failure', [False, True])
 def test_runner_wandb_numeric_logging_and_cleanup(local_runner, monkeypatch, failure):
-    run = Mock()
+    run = Mock(url="https://wandb.ai/test/project/runs/training")
     wandb = SimpleNamespace(init=Mock(return_value=run), Settings=Mock())
     monkeypatch.setitem(sys.modules, 'wandb', wandb)
     local_runner.config['wandb']['mode'] = 'offline'

@@ -158,7 +158,7 @@ def _check_mps_bfloat16():
 
 
 def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens=128,
-                  device='cpu', system_prompt=''):
+                  device='cpu', system_prompt='', return_metadata=False):
     """Score the input, then generate a rationale conditioned on that prediction."""
     from .joint_data import joint_messages, reasoning_prefix
 
@@ -191,7 +191,14 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
             generated = model.generate(**batch, do_sample=False, num_beams=1,
                                        max_new_tokens=max_new_tokens, use_cache=True)
             reasoning = processor.batch_decode(generated[:, length:], skip_special_tokens=True)[0]
-            return {'score': score, 'reasoning': reasoning}
+            result = {'score': score, 'reasoning': reasoning}
+            if return_metadata:
+                tokens = generated[0, length:].tolist()
+                eos = model.generation_config.eos_token_id
+                eos = [eos] if isinstance(eos, int) else (eos or [])
+                result.update(tokens=len(tokens), hit_token_limit=len(tokens) >= max_new_tokens
+                              and (not tokens or tokens[-1] not in eos))
+            return result
     finally:
         model.train(was_training)
 
@@ -344,7 +351,8 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
         hf_config.judge_config = copy.deepcopy(resolved["objective"])
         manifest = {"schema_version": 1, "base_model_name_or_path": model_config["name_or_path"],
                     "base_model_revision": revision, "judge_config": copy.deepcopy(hf_config.judge_config),
-                    "resolved_config": copy.deepcopy(resolved)}
+                    "resolved_config": copy.deepcopy(resolved),
+                    "training_wandb_url": run.url if run is not None else None}
         processor = AutoProcessor.from_pretrained(
             model_config["name_or_path"], min_pixels=model_config["min_pixels"],
             max_pixels=model_config["max_pixels"], **load_options)

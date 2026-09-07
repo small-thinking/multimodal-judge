@@ -70,6 +70,54 @@ Trainer; `joint_model.py` defines the heads and losses; `joint_inference.py`
 restores a saved model for scoring and rationale generation. `training_config.py`
 holds configuration validation and small helpers; it is not another trainer.
 
+## Evaluate a checkpoint
+
+Evaluation is independent of training. It uses the saved prompt and image processor,
+reads one image at a time, and reports MAE/RMSE, bias, P90/max error, rounded accuracy
+and the fraction within one rating point. Constant baselines use **training** labels.
+Choose a fresh output directory for every run:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge evaluate \
+  --checkpoint artifacts/training/my-run --data-dir data/training_data/v4 \
+  --split test --device mps --output-dir artifacts/evaluation/runs/my-eval \
+  --wandb-mode online
+```
+
+For a local UI with checkpoint/dataset selection, progress and saved comparisons:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge evaluation-center --port 8877
+```
+
+Open http://127.0.0.1:8877. Checkpoints are discovered under `artifacts/training/`,
+datasets under `data/training_data/`, and reports under `artifacts/evaluation/runs/`.
+One evaluation runs at a time. Use native MPS on Mac; use `--device cuda` in a GPU
+container for the CLI. `HF_HOME` should point to the same cache used for training.
+
+Add `--include-base` for original-Qwen JSON inference. Base has no learned scalar
+head; its output instruction is adapted for direct scoring. Invalid JSON is counted
+separately, never as a zero rating. Compare the matching base-valid subset when some
+outputs fail. Use `--max-samples` for a smoke run, `--max-new-tokens` to override the
+saved generation budget, or `--split validation` while tuning. Keep test for held-out
+measurement.
+
+Online logging creates a separate W&B **evaluation** run in `multimodal-judge`, with
+final aggregate metrics and per-score aggregates. Checkpoint/data hashes and the
+training-run link stay in the local report. Override `--wandb-project`, `--wandb-entity` or
+`--training-run-url` as needed. Raw samples and predictions remain local.
+Use `--wandb-mode offline` or `disabled` without network access. If an upload fails,
+local `report.json` remains available; retry logging without rerunning inference:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge log-evaluation \
+  --report artifacts/evaluation/runs/my-eval/report.json --wandb-mode online
+```
+
+RMSE has the same unit as the score, but penalizes large errors more than MAE.
+Nine exact predictions and one error of 3 points give RMSE ≈ 0.95, not an error of
+0.95 on every sample. A value of 1 is not a universal quality threshold.
+
 ## Build Docker locally
 
 ```bash
@@ -177,3 +225,44 @@ synthetic image/text example repeated for five updates per run**, not the real
 8/1/1 dataset. Saved-adapter inference was also checked in a fresh process.
 This validates plumbing and short-run performance, not held-out quality or a
 10,000-example training run. See the [model notes](docs/joint-model.md).
+
+### Reasoning review (draft rubric)
+
+Rating error and explanation quality are separate. The draft
+`configs/rubrics/reasoning-v1.yaml` scores visual accuracy, grounded style description,
+fluency/repetition and inference reliability, each on **1–3** with a short Chinese
+explanation. Replace its anchors and version when your rubric is ready. Unsupported
+inferences should not earn credit; appropriate uncertainty or abstention can score well.
+
+Add `--reasoning-rubric configs/rubrics/reasoning-v1.yaml` to `evaluate`, or select the
+rubric in Evaluation Center. To prepare reviews from existing predictions without
+rerunning the model:
+
+```bash
+uv run --no-sync multimodal-judge prepare-reasoning-reviews \
+  --report artifacts/evaluation/runs/my-eval/report.json \
+  --reasoning-rubric configs/rubrics/reasoning-v1.yaml \
+  --output-dir artifacts/evaluation/runs/my-review-queue
+```
+
+`reasoning-requests.jsonl` contains local image paths, titles, candidate explanations
+and an empty JSON response template. Give a human or future multimodal judge the images
+and rubric alongside those requests. It excludes human labels and predictor names.
+No judge is configured or invoked automatically: pending/unscorable reviews have no scores.
+
+Fill `response.dimensions` with `{ "rating": 1, "reasoning": "简短依据" }` for every
+rubric dimension, retaining `review_id` and `rubric_sha256`. If review is impossible,
+use `response: { "status": "unscorable", "reason": "原因" }` instead. Import completed
+reviews into a new report and optionally log their aggregate scores:
+
+```bash
+uv run --no-sync --env-file .env multimodal-judge import-reasoning-reviews \
+  --report artifacts/evaluation/runs/my-review-queue/report.json \
+  --reviews /path/to/completed-reviews.jsonl --reviewer human-v1 \
+  --output-dir artifacts/evaluation/runs/my-reviewed --wandb-mode online
+```
+
+The page shows per-dimension results and coverage; W&B logs `reasoning/<method>/*`
+aggregates only. Rubric scores depend on the reviewer and are not ground truth. Do not
+mix reviewers or rubric versions in a comparison. New base inference explicitly asks
+for Chinese reasoning and JSON; old runs retain their original prompt and are labeled legacy.
