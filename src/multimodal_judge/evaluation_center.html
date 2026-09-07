@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evaluation Center</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#23312c;background:#f3f5f2}*{box-sizing:border-box}body{margin:0}header{background:white;border-bottom:1px solid #dce2dc;padding:22px 30px}h1{font-size:25px;margin:4px 0}h2{font-size:17px;margin:0 0 16px}main{max-width:1400px;margin:auto;padding:24px}section{background:white;border:1px solid #dce2dc;border-radius:12px;padding:20px;margin-bottom:20px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.fields{display:grid;grid-template-columns:2fr 2fr 1fr 1fr;gap:12px}label{display:block;font-size:13px}select,input,button{font:inherit;padding:10px;border:1px solid #cbd4cd;border-radius:8px;background:white;color:inherit}select{width:100%;margin-top:7px}button{cursor:pointer}button.primary{background:#235b44;color:white}button:disabled{opacity:.5;cursor:default}.bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:15px}.bar select{width:auto;margin:0}.muted,small{color:#64756b;font-size:13px}p{line-height:1.6}progress{width:220px}table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:9px;border-bottom:1px solid #e4e8e0}.text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.imagebox{height:420px;background:#f1f3ef;border-radius:8px;display:grid;place-items:center}.imagebox img{width:100%;height:100%;object-fit:contain;min-height:0}.scores{display:flex;gap:35px;margin:20px 0}.scores strong{display:block;font-size:28px}.prediction{border-top:1px solid #e4e8e0;padding-top:16px;margin-top:16px}.warning{color:#965a10}.error{color:#a32b22}svg{width:100%;height:auto}a{color:#235b44}[hidden]{display:none!important}@media(max-width:800px){.grid,.fields{grid-template-columns:1fr}.tablebox{overflow:auto}main{padding:12px}.imagebox{height:320px}}
+</style>
+<header><small>MULTIMODAL JUDGE · LOCAL EVALUATION</small><h1>Evaluation Center</h1></header>
+<main><section><h2>Run an evaluation</h2><form id="launch"><div class="fields">
+<label>Checkpoint<select id="checkpoint" required></select></label><label>Dataset<select id="dataset" required></select></label>
+<label>Split<select id="split"><option>test</option><option>validation</option></select></label>
+<label>W&B logging<select id="wandb"><option>online</option><option>offline</option><option>disabled</option></select></label></div>
+<div class="bar"><label>Reasoning rubric <select id="rubric"><option value="">No reasoning review</option></select></label><label><input type="checkbox" id="includeBase"> Include base JSON inference</label><label><input type="checkbox" id="llmJudge"> Enable LLM judge (Grok 4.6 / low; cached)</label><button class="primary" id="start">Run evaluation</button><progress id="progress" value="0" max="1"></progress><span id="status" class="muted">Ready</span><a id="log" hidden>Run log</a></div>
+<p class="muted">Uses the checkpoint's saved prompt, image settings and generation budget. W&B receives aggregate error metrics. Checkpoint/data fingerprints stay in the local report. Enabling LLM judge sends the image, title and candidate explanation to xAI; otherwise they stay local.</p></form><p id="error" role="alert" class="error"></p></section>
+<section><div class="bar"><h2>Saved evaluations</h2><select id="runs" aria-label="Saved evaluations"></select><a id="wandbLink" hidden target="_blank" rel="noopener">Open W&B dashboard ↗</a><a id="download" hidden download>Download report</a></div></section>
+<div id="report" hidden><section><h2>Rating errors</h2><p class="muted" id="provenance"></p><div class="tablebox"><table><thead><tr><th>Predictor</th><th>Valid / total</th><th>MAE ↓</th><th>RMSE ↓</th><th>Bias</th><th>P90 error ↓</th><th>Rounded accuracy ↑</th><th>Within ±1 ↑</th></tr></thead><tbody id="metrics"></tbody></table></div><p class="muted">RMSE is measured in rating points and gives large errors extra weight. For nine exact predictions and one error of 3 points, MAE = 0.30 and RMSE ≈ 0.95. Compare against the constant baseline; 1 is not a universal pass/fail threshold.</p><p class="muted" id="baseNote"></p><details id="basePromptDetails" hidden><summary>Base inference prompt</summary><pre id="basePrompt" class="text"></pre></details></section>
+<section id="reasoningPanel" hidden><h2>Reasoning quality · 1–3 per dimension</h2><p id="reasoningStatus" class="muted"></p><div class="tablebox"><table><thead id="reasoningHead"></thead><tbody id="reasoningMetrics"></tbody></table></div><details><summary>Rubric and scoring anchors</summary><pre id="rubricText" class="text"></pre></details><a id="reviewRequests" download>Download local review requests</a></section><div class="grid"><section><h2>Prediction vs. human rating</h2><div id="scatter"></div><small>● Fine-tuned (green) · ■ Base (blue) · dashed line = exact agreement</small></section><section><h2>Absolute error distribution</h2><div id="histogram"></div><small>Fine-tuned counts by absolute error in rating points.</small></section></div>
+<section><div class="bar"><select id="sort" aria-label="Sort examples"><option value="error">Largest fine-tuned error</option><option value="original">Dataset order</option><option value="difference">Largest base / fine-tuned difference</option></select><select id="filter" aria-label="Filter examples"><option value="all">All examples</option><option value="large">Fine-tuned error > 1</option><option value="invalid">Base output invalid</option></select><input id="search" aria-label="Search" placeholder="Search text or explanation"><button id="prev">← Previous</button><span id="position"></span><button id="next">Next →</button></div></section>
+<div class="grid" id="example"><section><h2 id="sample"></h2><div class="imagebox"><img id="image" alt="Evaluation input"></div><h3>Input text</h3><div id="text" class="text"></div></section><section><h2>Scores & explanations</h2><div class="scores" id="scores"></div><div id="predictions"></div><div class="prediction"><h2>Human reasoning</h2><div class="text" id="truth"></div></div></section></div></div></main>
+<script>
+const $ = (id) => document.getElementById(id),
+  fmt = (v) => (v == null ? '—' : Number(v).toFixed(3)),
+  pct = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+const names = {
+  joint: 'Fine-tuned',
+  base: 'Base (valid JSON)',
+  train_median: 'Train median',
+  train_mean: 'Train mean',
+  joint_base_valid: 'Fine-tuned (base-valid subset)',
+  train_median_base_valid: 'Train median (base-valid subset)',
+};
+let report,
+  rows = [],
+  index = 0,
+  runId = '',
+  lastRunList = '',
+  pendingRun = '';
+async function api(url, options) {
+  const response = await fetch(url, { cache: 'no-store', ...options });
+  if (!response.ok) {
+    let message;
+    try {
+      message = (await response.json()).error;
+    } catch {
+      message = response.statusText;
+    }
+    throw Error(message);
+  }
+  return response.json();
+}
+function options(id, values) {
+  $(id).replaceChildren(
+    ...values.map((v) => {
+      const o = document.createElement('option');
+      o.value = v.value ?? v;
+      o.textContent = v.label ?? v;
+      return o;
+    }),
+  );
+}
+function link(id, url) {
+  $(id).hidden = !url;
+  if (url) $(id).href = url;
+}
+async function poll() {
+  try {
+    const state = await api('/api/state');
+    const signature = JSON.stringify(state.runs);
+    if (signature !== lastRunList) {
+      lastRunList = signature;
+      const selected = $('runs').value;
+      options(
+        'runs',
+        state.runs.map((r) => ({ value: r.id, label: `${r.id} · ${r.checkpoint} · ${r.split}` })),
+      );
+      if (pendingRun && state.runs.some((r) => r.id === pendingRun)) {
+        $('runs').value = pendingRun;
+        pendingRun = '';
+        await loadReport();
+      } else if (state.runs.some((r) => r.id === selected)) $('runs').value = selected;
+      else if (state.runs.length) await loadReport();
+    }
+    const p = state.progress;
+    $('start').disabled = Boolean(p?.running);
+    if (p) {
+      $('status').textContent =
+        `${p.status}${p.method ? ' · ' + p.method : ''} · ${p.completed || 0}/${p.total || '?'}`;
+      $('progress').value = p.completed || 0;
+      $('progress').max = p.total || 1;
+      link('log', '/' + encodeURIComponent(p.id) + '.log');
+      if (p.status === 'failed')
+        $('error').textContent = p.error || 'Evaluation failed; see run log.';
+    }
+    if (p?.running) setTimeout(poll, 2000);
+  } catch (e) {
+    $('error').textContent = e.message;
+  }
+}
+$('launch').onsubmit = async (e) => {
+  e.preventDefault();
+  $('error').textContent = '';
+  $('start').disabled = true;
+  try {
+    const launched = await api('/api/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        checkpoint: $('checkpoint').value,
+        data_dir: $('dataset').value,
+        split: $('split').value,
+        include_base: $('includeBase').checked,
+        enable_llm_judge: $('llmJudge').checked,
+        wandb_mode: $('wandb').value,
+        reasoning_rubric: $('rubric').value || null,
+      }),
+    });
+    pendingRun = launched.id;
+    await poll();
+  } catch (e) {
+    $('error').textContent = e.message;
+    $('start').disabled = false;
+  }
+};
+function scatter() {
+  const w = 500,
+    h = 230,
+    x = (v) => 35 + (v / 9) * 445,
+    y = (v) => 200 - (v / 9) * 180;
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Predicted versus human ratings">`;
+  for (let i = 0; i <= 9; i += 3)
+    s += `<line x1="35" y1="${y(i)}" x2="480" y2="${y(i)}" stroke="#e5eae5"/><text x="8" y="${y(i) + 4}" font-size="12">${i}</text><text x="${x(i)}" y="222" font-size="12">${i}</text>`;
+  s += `<line x1="${x(0)}" y1="${y(0)}" x2="${x(9)}" y2="${y(9)}" stroke="#a8b7ad" stroke-dasharray="5 5"/>`;
+  for (const r of report.rows)
+    for (const method of ['joint', 'base']) {
+      const p = r.predictions[method];
+      if (p?.rating == null) continue;
+      const title = `<title>${names[method]}: ${fmt(p.rating)}; human: ${r.target}</title>`;
+      s +=
+        method === 'base'
+          ? `<rect x="${x(r.target) - 3}" y="${y(p.rating) - 3}" width="6" height="6" fill="#4778b5" opacity=".7">${title}</rect>`
+          : `<circle cx="${x(r.target)}" cy="${y(p.rating)}" r="4" fill="#235b44" opacity=".65">${title}</circle>`;
+    }
+  return s + '</svg>';
+}
+function histogram() {
+  const counts = [0, 0, 0, 0];
+  for (const r of report.rows) {
+    const e = Math.abs(r.predictions.joint.rating - r.target);
+    counts[e <= 0.5 ? 0 : e <= 1 ? 1 : e <= 2 ? 2 : 3]++;
+  }
+  const max = Math.max(1, ...counts),
+    labels = ['0–0.5', '>0.5–1', '>1–2', '>2'];
+  return (
+    '<svg viewBox="0 0 500 230" role="img" aria-label="Fine-tuned absolute error histogram">' +
+    counts
+      .map((n, i) => {
+        const height = (n / max) * 165;
+        return `<rect x="${35 + i * 115}" y="${190 - height}" width="80" height="${height}" rx="3" fill="#235b44"/><text x="${75 + i * 115}" y="${180 - height}" text-anchor="middle" font-size="13">${n}</text><text x="${75 + i * 115}" y="220" text-anchor="middle" font-size="12">${labels[i]}</text>`;
+      })
+      .join('') +
+    '</svg>'
+  );
+}
+async function loadReport() {
+  runId = $('runs').value;
+  if (!runId) return;
+  report = await api('/' + encodeURIComponent(runId) + '/report.json');
+  $('report').hidden = false;
+  link('wandbLink', report.wandb_url);
+  link('download', '/' + encodeURIComponent(runId) + '/report.json');
+  $('provenance').textContent =
+    `${report.model.name} · ${report.split} · ${report.rows.length} examples · ${report.settings.device} / ${report.settings.dtype} · checkpoint ${report.checkpoint_sha256.slice(0, 12)}`;
+  $('metrics').replaceChildren();
+  for (const [name, m] of Object.entries(report.metrics)) {
+    const tr = document.createElement('tr');
+    for (const value of [
+      names[name] || name,
+      `${m.valid_count ?? m.count ?? 0} / ${m.total_count ?? report.rows.length}`,
+      fmt(m.mae),
+      fmt(m.rmse),
+      fmt(m.bias),
+      fmt(m.p90_absolute_error),
+      pct(m.rounded_accuracy),
+      pct(m.within_one),
+    ]) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.append(td);
+    }
+    $('metrics').append(tr);
+  }
+  $('baseNote').textContent = report.methods.includes('base')
+    ? 'Base directly generates JSON with its original LM head; fine-tuned uses the learned scalar head. Invalid base responses are excluded, never scored as zero. Use the same-subset rows for paired comparisons. Prompt and scoring interpretation differ, so this is an end-to-end comparison.'
+    : '';
+  if (report.methods.includes('base') && report.base_output_policy !== 'zh-json-v1') {
+    $('baseNote').textContent +=
+      ' Legacy run: Chinese output was not required. These scores use the old prompt.';
+  }
+  renderReasoningMetrics();
+  $('basePromptDetails').hidden = !report.base_system_prompt;
+  $('basePrompt').textContent = report.base_system_prompt || '';
+  $('scatter').innerHTML = scatter();
+  $('histogram').innerHTML = histogram();
+  selectRows();
+}
+function renderReasoningMetrics() {
+  const evaluation = report.reasoning_evaluation;
+  $('reasoningPanel').hidden = !evaluation;
+  if (!evaluation) return;
+  const dimensions = Object.entries(evaluation.rubric.dimensions);
+  $('reasoningStatus').textContent =
+    `${evaluation.rubric.version} · ${evaluation.reviewer || 'Judge not configured; awaiting reviews'} · ${evaluation.status}. Scores are rubric judgments, not objective ground truth.`;
+  $('rubricText').textContent = JSON.stringify(evaluation.rubric, null, 2);
+  $('reviewRequests').href = '/' + encodeURIComponent(runId) + '/reasoning-requests.jsonl';
+  $('reasoningHead').replaceChildren();
+  const heading = document.createElement('tr');
+  for (const label of [
+    'Predictor',
+    'Scored / total',
+    ...dimensions.map(([, value]) => value.name),
+  ]) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    heading.append(th);
+  }
+  $('reasoningHead').append(heading);
+  $('reasoningMetrics').replaceChildren();
+  for (const [method, metrics] of Object.entries(evaluation.metrics)) {
+    const tr = document.createElement('tr');
+    for (const value of [
+      names[method],
+      `${metrics.scored_count} / ${metrics.total_count}`,
+      ...dimensions.map(([key]) => fmt(metrics[key + '_mean'])),
+    ]) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.append(td);
+    }
+    $('reasoningMetrics').append(tr);
+  }
+}
+function selectRows() {
+  if (!report) return;
+  const q = $('search').value.toLowerCase();
+  rows = report.rows
+    .filter((r) =>
+      (
+        r.text +
+        ' ' +
+        r.target_reasoning +
+        ' ' +
+        Object.values(r.predictions)
+          .map((p) => p.reasoning || p.raw_output || '')
+          .join(' ')
+      )
+        .toLowerCase()
+        .includes(q),
+    )
+    .filter((r) =>
+      $('filter').value === 'large'
+        ? Math.abs(r.predictions.joint.rating - r.target) > 1
+        : $('filter').value === 'invalid'
+          ? Boolean(r.predictions.base?.parse_error)
+          : true,
+    );
+  rows.sort((a, b) => {
+    if ($('sort').value === 'original') return a.index - b.index;
+    const value = (r) =>
+      $('sort').value === 'difference'
+        ? r.predictions.base?.rating != null
+          ? Math.abs(r.predictions.base.rating - r.predictions.joint.rating)
+          : -1
+        : Math.abs(r.predictions.joint.rating - r.target);
+    return value(b) - value(a);
+  });
+  index = 0;
+  render();
+}
+function render() {
+  const r = rows[index];
+  $('example').hidden = !r;
+  $('position').textContent = r ? `${index + 1} / ${rows.length}` : 'No matches';
+  $('prev').disabled = index === 0;
+  $('next').disabled = index >= rows.length - 1;
+  if (!r) return;
+  $('sample').textContent = `${report.split} example ${r.index + 1}`;
+  $('image').src = '/' + encodeURIComponent(runId) + '/' + r.image;
+  $('text').textContent = r.text;
+  $('truth').textContent = r.target_reasoning || 'No human explanation.';
+  $('scores').replaceChildren();
+  for (const [label, value] of [
+    ['Human', r.target],
+    ['Fine-tuned', r.predictions.joint.rating],
+    ['Base', r.predictions.base?.rating],
+  ]) {
+    const div = document.createElement('div'),
+      small = document.createElement('small'),
+      strong = document.createElement('strong');
+    small.textContent = label;
+    strong.textContent = value == null ? '—' : Number(value).toFixed(2);
+    div.append(small, strong);
+    $('scores').append(div);
+  }
+  $('predictions').replaceChildren();
+  for (const method of ['joint', 'base']) {
+    const p = r.predictions[method];
+    if (!p) continue;
+    const div = document.createElement('div');
+    div.className = 'prediction';
+    const title = document.createElement('h2'),
+      reason = document.createElement('div'),
+      info = document.createElement('p');
+    title.textContent = names[method] + ' reasoning';
+    reason.className = 'text';
+    reason.textContent = p.reasoning || 'No valid explanation.';
+    info.className = p.parse_error || p.hit_token_limit ? 'warning' : 'muted';
+    info.textContent = [
+      p.seconds != null ? p.seconds.toFixed(2) + ' seconds' : '',
+      p.tokens != null ? p.tokens + ' tokens' : '',
+      p.parse_error || '',
+      p.hit_token_limit ? 'Reached generation token limit' : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    div.append(title, reason, info);
+    const review = p.reasoning_review;
+    if (review) {
+      const label = document.createElement('p');
+      label.className = 'muted';
+      label.textContent = 'Reasoning review: ' + review.status;
+      div.append(label);
+      for (const [key, value] of Object.entries(review.dimensions || {})) {
+        const detail = document.createElement('p');
+        detail.textContent = `${report.reasoning_evaluation.rubric.dimensions[key].name}: ${value.rating}/3 — ${value.reasoning}`;
+        div.append(detail);
+      }
+      if (review.reason) {
+        const why = document.createElement('p');
+        why.textContent = review.reason;
+        div.append(why);
+      }
+    }
+    if (p.raw_output) {
+      const details = document.createElement('details'),
+        summary = document.createElement('summary'),
+        raw = document.createElement('pre');
+      summary.textContent = 'Raw output';
+      raw.className = 'text';
+      raw.textContent = p.raw_output;
+      details.append(summary, raw);
+      div.append(details);
+    }
+    $('predictions').append(div);
+  }
+}
+$('runs').onchange = () => loadReport().catch((e) => ($('error').textContent = e.message));
+for (const id of ['sort', 'filter', 'search']) $(id).oninput = selectRows;
+$('prev').onclick = () => {
+  index--;
+  render();
+};
+$('next').onclick = () => {
+  index++;
+  render();
+};
+window.onkeydown = (e) => {
+  if (e.target.closest('input,select,textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const id = e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : null;
+  if (id && !$(id).disabled) {
+    e.preventDefault();
+    $(id).click();
+  }
+};
+api('/api/catalog')
+  .then((c) => {
+    options('checkpoint', c.checkpoints);
+    options('dataset', c.datasets);
+    options('rubric', [{ value: '', label: 'No reasoning review' }, ...(c.rubrics || [])]);
+    return poll();
+  })
+  .catch((e) => ($('error').textContent = e.message));
+</script>
+</html>
