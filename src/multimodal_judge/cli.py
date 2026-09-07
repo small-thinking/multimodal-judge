@@ -19,7 +19,8 @@ def select_device(requested, torch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["smoke", "inspect-data", "train-joint", "judge"])
+    parser.add_argument("command", choices=["smoke", "inspect-data", "train-joint", "judge",
+                                                     "evaluate", "evaluation-center", "log-evaluation"])
     parser.add_argument("--config", type=Path)
     parser.add_argument("--model", help="Override model.name_or_path")
     parser.add_argument("--data-dir", type=Path, help="Directory containing split JSONL files")
@@ -32,7 +33,42 @@ def main():
     parser.add_argument("--text", help="Input text for joint inference")
     parser.add_argument("--device", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--dtype", choices=["float32", "bfloat16"])
+    parser.add_argument("--split", choices=["test", "validation"], default="test")
+    parser.add_argument("--include-base", action="store_true")
+    parser.add_argument("--max-samples", type=int)
+    parser.add_argument("--max-new-tokens", type=int)
+    parser.add_argument("--wandb-project", default="multimodal-judge")
+    parser.add_argument("--wandb-entity")
+    parser.add_argument("--training-run-url")
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--port", type=int, default=8877)
     args = parser.parse_args()
+    if args.command == "evaluation-center":
+        from .evaluation_center import serve_center
+
+        serve_center(args.root, args.port)
+        return
+    if args.command == "log-evaluation":
+        if args.report is None:
+            parser.error("log-evaluation requires --report")
+        from .evaluation import log_evaluation
+
+        log_evaluation(args.report, args.wandb_mode or "online",
+                       args.wandb_project, args.wandb_entity)
+        return
+    if args.command == "evaluate":
+        if args.checkpoint is None or args.data_dir is None or args.output_dir is None:
+            parser.error("evaluate requires --checkpoint, --data-dir and --output-dir")
+        from .evaluation import run_evaluation
+
+        result = run_evaluation(args.checkpoint, args.data_dir, args.output_dir,
+            split=args.split, device=args.device or "auto", include_base=args.include_base,
+            max_samples=args.max_samples, max_new_tokens=args.max_new_tokens,
+            wandb_mode=args.wandb_mode or "offline", wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity, training_run_url=args.training_run_url)
+        print(json.dumps(result["metrics"], indent=2))
+        return
     if args.command == "judge":
         if args.checkpoint is None or args.image is None or args.text is None:
             parser.error("judge requires --checkpoint, --image and --text")

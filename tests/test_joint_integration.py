@@ -85,6 +85,16 @@ def test_joint_training_reload_and_inference(tmp_path):
     result = predict_joint(restored, processor, record["image"], record["text"],
                            max_new_tokens=2, device=device, system_prompt=settings["prompt"]["system"])
     assert 0 <= result["score"] <= 9 and isinstance(result["reasoning"], str)
+    from multimodal_judge.evaluation import run_evaluation
+
+    evaluation = run_evaluation(output, data, tmp_path / "evaluation", split="validation",
+                                device=device, max_new_tokens=2, include_base=True,
+                                wandb_mode="disabled")
+    assert evaluation["metrics"]["base"]["total_count"] == 1
+    assert evaluation["metrics"]["joint"]["valid_count"] == 1
+    assert evaluation["rows"][0]["predictions"]["joint"]["rating"] == pytest.approx(
+        result["score"], abs=0.005 if dtype == torch.bfloat16 else 1e-5)
+    assert evaluation["rows"][0]["predictions"]["joint"]["tokens"] <= 2
     # Independent CPU process loads only the saved manifest + base + adapter/head.
     cli = Path(sys.executable).with_name("multimodal-judge")
     reply = subprocess.run(
