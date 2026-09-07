@@ -14,7 +14,7 @@ _DEFAULTS = {
              "max_eval_samples": None, "max_length": 1024, "max_reasoning_tokens": 128},
     "lora": {"enabled": True, "r": 8, "alpha": 16, "dropout": 0.05,
              "target_modules": ["q_proj", "v_proj"]},
-    "training": {"output_dir": "artifacts/training/qwen3-vl-2b-joint", "num_train_epochs": 1,
+    "training": {"output_dir": "artifacts/training/qwen3-vl-2b-joint", "num_train_epochs": 2,
                  "max_steps": -1, "per_device_train_batch_size": 1,
                  "per_device_eval_batch_size": 1, "gradient_accumulation_steps": 8,
                  "learning_rate": 0.0002, "logging_steps": 1, "eval_steps": 100,
