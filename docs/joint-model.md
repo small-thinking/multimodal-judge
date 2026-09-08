@@ -65,6 +65,44 @@ model predicts the continuous score, rounds it to an integer conditioning bin,
 and generates the rationale. Training uses the gold bin. This mismatch needs
 held-out evaluation; generated explanations do not establish reasoning fidelity.
 
+## Repetition monitoring
+
+Set `training.repetition_eval: true` to generate a rationale for every validation
+row at each `eval_steps` interval and at final evaluation. This adds one W&B curve,
+`validation/reasoning_rep4` (0–1, lower is less literal repetition). Generation uses
+the predicted score, greedy decoding and `training.max_new_tokens`, matching joint
+inference; it never receives the gold score or reference rationale. This adds a
+full generation pass to validation, so evaluation takes longer.
+
+For each answer, Rep-4 is `1 - unique_4grams / total_4grams`, computed on generated
+token IDs after excluding the prompt and tokenizer special tokens. The reported
+value is the mean over answers with at least four body tokens. Shorter answers
+are undefined and excluded; eligible/short counts are stored in local Trainer
+logs and `metrics.json`, not additional W&B curves. If every answer is too short,
+the metric is omitted rather than reported as zero. Generated text/token IDs are
+discarded, never uploaded or written by this metric. Rep-4 measures literal token
+repetition, not the percentage of answers with loops or reasoning correctness.
+Compare runs with the same validation rows, tokenizer and generation budget;
+shorter or incorrect answers can also have lower repetition.
+
+The batch-16 config enables this monitor. Its generation budget is 129 tokens:
+128 supervised rationale-body tokens plus one EOS. The collator explicitly
+supervises EOS and shares the inference chat prefix. Long reference reasons are
+still truncated at the token limit, potentially mid-sentence; the extra generation
+token fixes the EOS budget boundary, not that truncation policy or repetition.
+
+Start a fresh classification experiment with live aggregate W&B logging:
+
+```bash
+uv run --env-file .env multimodal-judge train-joint \
+  --config configs/train-joint-batch16.yaml \
+  --score-head classification --score-weight 1 \
+  --wandb-mode online
+```
+
+The CLI creates a new timestamped output directory. Use `--score-head regression`
+for the existing Huber head; changing the head requires a fresh run.
+
 ## Runtime
 
 Defaults: batch 1, gradient accumulation 8, gradient checkpointing, at most
