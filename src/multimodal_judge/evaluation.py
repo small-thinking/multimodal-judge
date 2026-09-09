@@ -107,7 +107,7 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
     from tqdm import tqdm
     from .joint_data import JointScoreDataset
     from .joint_inference import load_joint_checkpoint
-    from .joint_training import predict_joint
+    from .joint_training import RATIONALE_GENERATION, predict_joint
 
     resolved_base_prompt = _base_prompt(base_system_prompt) if include_base else None
     if enable_llm_judge and judge_model == 'grok-4.6' and judge_effort == 'none':
@@ -170,7 +170,8 @@ def run_evaluation(checkpoint, data_dir, output_dir, split='test', device='auto'
               'training_wandb_url': training_run_url or manifest.get('training_wandb_url'),
               'settings': {'device': device, 'dtype': config['model']['dtype'],
                            'max_new_tokens': limit, 'max_samples': max_samples,
-                           'include_base': include_base},
+                           'include_base': include_base,
+                           'joint_reasoning_generation': dict(RATIONALE_GENERATION)},
               'methods': ['joint', 'train_median', 'train_mean'], 'metrics': {}, 'rows': []}
     write_json(output / 'progress.json', {'status': 'loading', 'completed': 0,
                                          'total': len(dataset) * (2 if include_base else 1)})

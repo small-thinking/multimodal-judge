@@ -18,15 +18,18 @@ from multimodal_judge import joint_training as joint
 from multimodal_judge import training_config
 
 
-def test_config_defaults_match_yaml_and_are_independent():
-    config = yaml.safe_load(Path('configs/train-joint.yaml').read_text())
+def test_config_overrides_and_defaults_are_independent():
+    config = {"prompt": {"system": "synthetic"}, "training": {"num_train_epochs": 10},
+              "objective": {"regression_loss": "mse"}}
     before = copy.deepcopy(config)
     defaults = joint._resolve_config({})
     assert defaults['objective']['head_type'] == 'regression'
     assert defaults['objective']['score_weight'] == 1.0
+    assert defaults['runtime']['cpu_mkldnn'] is True
     resolved = joint._resolve_config(config)
     assert resolved["prompt"] == config["prompt"]
-    assert joint._resolve_config({"prompt": config["prompt"]}) == resolved
+    assert resolved["training"]["num_train_epochs"] == 10
+    assert resolved["objective"]["regression_loss"] == "mse"
     assert config == before
     resolved['lora']['target_modules'].append('k_proj')
     resolved['objective']['rationale_weight'] = 1
@@ -43,6 +46,8 @@ def test_config_defaults_match_yaml_and_are_independent():
     ('objective', 'head_type', 'ordinal'), ('objective', 'head_type', None),
     ('data', 'max_reasoning_tokens', 0), ('runtime', 'mps_memory_fraction', 1.1),
     ('runtime', 'mps_memory_fraction', 0), ('training', 'max_steps', 0),
+    ('runtime', 'cpu_mkldnn', 'false'), ('runtime', 'cpu_mkldnn', 0),
+    ('runtime', 'cpu_mkldnn', None),
     ('prompt', 'system', None), ('prompt', 'system', 42),
     ('model', 'trust_remote_code', True), ('lora', 'modules_to_save', []),
 ])
@@ -51,10 +56,17 @@ def test_invalid_config(section, key, value):
         joint._resolve_config({section: {key: value}})
 
 
+@pytest.mark.parametrize('enabled', [True, False])
+def test_cpu_mkldnn_accepts_explicit_boolean(enabled):
+    resolved = joint._resolve_config({'runtime': {'cpu_mkldnn': enabled}})
+    assert resolved['runtime']['cpu_mkldnn'] is enabled
+
+
 def test_continuous_metrics_no_rounding_or_clipping():
     result = joint.joint_regression_metrics(SimpleNamespace(
         predictions=np.array([[1.5], [5.0], [8.5]]), label_ids=np.array([0., 5., 9.])))
-    assert result == {'mae': pytest.approx(2 / 3), 'rmse': pytest.approx((2.5 / 3) ** .5),
+    assert result == {'mse': pytest.approx(2.5 / 3),
+                      'mae': pytest.approx(2 / 3), 'rmse': pytest.approx((2.5 / 3) ** .5),
                       'count': 3}
     with pytest.raises(ValueError):
         joint.joint_regression_metrics(SimpleNamespace(predictions=[float('nan')], label_ids=[1]))
@@ -92,6 +104,28 @@ def test_callback_numeric_only_global_step_and_sampled_memory(monkeypatch):
         assert not call.kwargs
 
 
+def test_raw_score_metrics_aggregate_errors_before_square_root():
+    from multimodal_judge.joint_model import JointJudgeOutput
+
+    totals = joint._LossTotals()
+    for prediction, target in [([1., 5.], [0., 5.]), ([8.], [5.])]:
+        scores = torch.tensor(target)
+        logits = torch.tensor(prediction).reshape(-1, 1).requires_grad_()
+        normalized_mse = ((logits.reshape(-1) - scores) / 9).square().mean()
+        totals.add(JointJudgeOutput(logits=logits, score_loss=normalized_mse,
+            rationale_loss=torch.tensor(0.), rationale_samples=torch.tensor(0.),
+            rationale_tokens=torch.tensor(0.)), len(target), scores)
+    metrics = totals.metrics()
+    assert metrics['mse'] == pytest.approx(10 / 3)
+    assert metrics['rmse'] == pytest.approx((10 / 3) ** .5)
+    assert metrics['mae'] == pytest.approx(4 / 3)
+    assert metrics['mse'] == pytest.approx(81 * metrics['score_loss'])
+    assert logits.grad is None
+    charts = joint.training_chart_metrics({**metrics, 'eval_mse': 4.})
+    assert charts['train/mse'] == pytest.approx(10 / 3)
+    assert charts['validation/mse'] == 4.
+
+
 def test_inference_uses_predicted_score_and_restores_mode(monkeypatch):
     from multimodal_judge import joint_data
     helper = Mock(wraps=joint_data.reasoning_prefix)
@@ -112,6 +146,12 @@ def test_inference_uses_predicted_score_and_restores_mode(monkeypatch):
     assert 'scores' not in model.call_args.kwargs and 'labels' not in model.call_args.kwargs
     assert 'score_positions' not in model.generate.call_args.kwargs
     assert model.generate.call_args.kwargs['max_new_tokens'] == 128
+    generation = model.generate.call_args.kwargs
+    assert generation['do_sample'] is True
+    assert generation['num_beams'] == 1
+    assert generation['temperature'] == 0.7
+    assert generation['top_p'] == 0.8
+    assert generation['top_k'] == 0
     assert processor.batch_decode.call_args.args[0].tolist() == [[8, 9]]
     model.train.assert_called_once_with(True)
     processor.side_effect = ValueError('encode failed')

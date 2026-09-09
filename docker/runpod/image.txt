@@ -1,0 +1,1 @@
+smallthinking/multimodal-judge:runpod-refresh-mse-10ep-20260909

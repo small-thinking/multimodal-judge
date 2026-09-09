@@ -9,20 +9,20 @@ _DEFAULTS = {
     "prompt": {"system": ""},
     "model": {"name_or_path": "Qwen/Qwen3-VL-2B-Instruct", "min_pixels": 4096,
               "max_pixels": 65536, "dtype": "bfloat16", "attn_implementation": "sdpa"},
-    "data": {"directory": "data/training_data/v2", "train_file": "train.jsonl",
+    "data": {"directory": "data/training_data/v6", "train_file": "train.jsonl",
              "validation_file": "validation.jsonl", "max_train_samples": None,
              "max_eval_samples": None, "max_length": 1024, "max_reasoning_tokens": 128},
     "lora": {"enabled": True, "r": 8, "alpha": 16, "dropout": 0.05,
              "target_modules": ["q_proj", "v_proj"]},
-    "training": {"output_dir": "artifacts/training/qwen3-vl-2b-joint", "num_train_epochs": 2,
-                 "max_steps": -1, "per_device_train_batch_size": 1,
-                 "per_device_eval_batch_size": 1, "gradient_accumulation_steps": 8,
+    "training": {"output_dir": "artifacts/training/qwen3-vl-2b-joint", "num_train_epochs": 1,
+                 "max_steps": -1, "per_device_train_batch_size": 16,
+                 "per_device_eval_batch_size": 1, "gradient_accumulation_steps": 1,
                  "learning_rate": 0.0002, "logging_steps": 1, "eval_steps": 100,
                  "save_steps": 100, "save_total_limit": 2, "gradient_checkpointing": True,
                  "dataloader_num_workers": 0, "seed": 42, "generate_eval": False,
                  "max_new_tokens": 128},
-    "runtime": {"device": "auto", "mps_memory_fraction": 0.75},
-    "objective": {"head_type": "regression", "score_weight": 1.0,
+    "runtime": {"device": "auto", "mps_memory_fraction": 0.75, "cpu_mkldnn": True},
+    "objective": {"head_type": "regression", "score_weight": 1.0, "regression_loss": "huber",
                   "rationale_weight": 0.1, "huber_delta": 0.1,
                   "score_min": 0.0, "score_max": 9.0, "ce_chunk_size": 32},
     "wandb": {"project": "multimodal-judge", "entity": None, "mode": "offline", "name": None},
@@ -87,7 +87,7 @@ def resolve_config(config):
     if resolved["training"]["max_steps"] == 0:
         raise ValueError("training.max_steps must be -1 or positive")
     for section, key in (("lora", "enabled"), ("training", "gradient_checkpointing"),
-                         ("training", "generate_eval")):
+                         ("training", "generate_eval"), ("runtime", "cpu_mkldnn")):
         if not isinstance(resolved[section][key], bool):
             raise ValueError(f"{section}.{key} must be boolean")
     validate_number(resolved["lora"]["dropout"], "lora.dropout")
@@ -101,6 +101,7 @@ def resolve_config(config):
         raise ValueError("model.min_pixels must not exceed max_pixels")
     for section, key, choices in (
         ("objective", "head_type", ("regression", "classification")),
+        ("objective", "regression_loss", ("huber", "mse")),
         ("model", "dtype", ("float32", "float16", "bfloat16")),
         ("model", "attn_implementation", ("eager", "sdpa", "flash_attention_2")),
         ("runtime", "device", ("auto", "cpu", "mps", "cuda")),

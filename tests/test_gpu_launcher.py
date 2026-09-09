@@ -23,6 +23,8 @@ def test_train_persists_outputs_and_applies_experiment(tmp_path):
     assert 'training.num_train_epochs=10' in cmd
     assert 'objective.rationale_weight=0' in cmd
     assert '/app/artifacts/training/test-run' in cmd
+    assert cmd[cmd.index('--entrypoint') + 1] == 'multimodal-judge'
+    assert cmd[cmd.index('--wandb-mode') + 1] == 'online'
 
 
 def test_evaluation_uses_validation_and_same_checkpoint(tmp_path):

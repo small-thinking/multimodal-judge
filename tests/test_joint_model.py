@@ -230,3 +230,18 @@ def test_rejects_supervised_prompt_and_padding_pool(model):
     data["score_positions"][1] = 7
     with pytest.raises(ValueError, match="padding"):
         model(**data)
+
+
+def test_mse_matches_raw_scale_and_backpropagates(model, tmp_path):
+    model.config.judge_config.update(regression_loss='mse', rationale_weight=0.0)
+    data = batch()
+    out = model(**data)
+    expected = ((out.logits[:, 0] - data['scores']) ** 2).mean() / 81
+    torch.testing.assert_close(out.score_loss, expected)
+    torch.testing.assert_close(out.loss, expected)
+    out.loss.backward()
+    assert model.score_head.weight.grad.abs().sum() > 0
+    model.save_pretrained(tmp_path)
+    restored = JointQwen3VLForConditionalGeneration.from_pretrained(tmp_path).eval()
+    assert restored.config.judge_config['regression_loss'] == 'mse'
+    torch.testing.assert_close(restored(**data).score_loss, out.score_loss)
