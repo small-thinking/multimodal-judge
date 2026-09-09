@@ -361,3 +361,27 @@ Base evaluation reads `src/multimodal_judge/prompts/base-evaluation.txt` by defa
 Edit that file, or pass `--base-system-prompt path/to/prompt.txt` to `evaluate`.
 This is the complete base system prompt, independent of the checkpoint's training
 prompt. Each report saves the exact prompt used; edits affect future evaluations.
+
+### Merge annotation partitions
+
+From the repository root, run:
+
+```bash
+uv run python -m multimodal_judge.merge_annotations
+```
+
+This merges `data/annotations/**/*.json` into
+`data/merged_annotations/merged_annotations.json`. Use `--annotation-dir` and
+`--output` to override these paths. Outputs must be outside the input directory
+and named `merged_*.json`. Backups, paths beginning with `merged_`, and documents
+marked as merge artifacts are excluded. Re-running atomically replaces the output
+with the same content when inputs are unchanged.
+
+The merge preserves all version-2 records, including repeated IDs, unscored records,
+and pending-review flags; it does not deduplicate or approve labels. `record_sources`
+provides the source file and index for each record, and `sources` includes input
+hashes. Legacy pointwise documents are retained under `legacy_partitions`, and
+partition-specific pairwise labels under `pairwise_partitions` to avoid key collisions.
+These retained sections are not converted into version-2 records or global pairwise
+labels. Continue using the original partitions for training-data preparation.
+Generated data stays local under the ignored `data/` directory.
