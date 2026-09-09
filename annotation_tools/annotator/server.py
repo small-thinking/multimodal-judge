@@ -525,7 +525,7 @@ def main():
     server = HTTPServer(("127.0.0.1", args.port), Handler)
     if bool(args.data_dir) != bool(args.annotation_file):
         parser.error("--data-dir and --annotation-file must be used together")
-    server.dataset = Dataset({"folder": args.data_dir, "json_file": args.annotation_file}) if args.data_dir else None
+    server.dataset = Dataset({"folder": str(Path(args.data_dir).expanduser().resolve()), "json_file": args.annotation_file}) if args.data_dir else None
     print(f"Local annotator: http://127.0.0.1:{server.server_port}", flush=True)
     try:
         server.serve_forever()
