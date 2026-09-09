@@ -12,7 +12,6 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 import torch
-import yaml
 
 from multimodal_judge import joint_training as joint
 from multimodal_judge import training_config
