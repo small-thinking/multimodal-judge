@@ -22,8 +22,8 @@ merged file through the page, with `data/` as the folder.
 Click **Skip & next** once to save the current inputs, persist `annotation.skip: true`,
 and advance. On the final record it saves and stays on that record.
 A skipped record needs no score; existing score/reasoning are retained in the form.
-Return to it, uncheck **Skipped — uncheck to restore**, provide a score if needed,
-and save to restore eligibility. Save failures keep the current record and edits.
+Return to it, provide a score if needed, and click **Save & next** to restore
+eligibility. **Skip & next** sets Skip; **Save & next** clears it. Save failures keep the current record and edits.
 Missing `skip` fields in older labels mean false. Saving an ordinary annotation is
 human confirmation and clears an AI draft's pending-review flag, as before.
 
