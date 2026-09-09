@@ -371,11 +371,12 @@ uv run python -m multimodal_judge.merge_annotations
 ```
 
 This merges `data/annotations/**/*.json` into
-`data/merged_annotations/merged_annotations.json`. Use `--annotation-dir` and
+a new `data/merged_annotations/merged_annotations_<UTC timestamp>_<unique suffix>.json`. Use `--annotation-dir` and
 `--output` to override these paths. Outputs must be outside the input directory
 and named `merged_*.json`. Backups, paths beginning with `merged_`, and documents
-marked as merge artifacts are excluded. Re-running atomically replaces the output
-with the same content when inputs are unchanged.
+marked as merge artifacts are excluded. Re-running creates a separate named version;
+explicit `--output` atomically replaces that file. Content is identical when inputs
+are unchanged.
 
 The merge preserves all version-2 records, including repeated IDs, unscored records,
 and pending-review flags; it does not deduplicate or approve labels. `record_sources`
@@ -385,3 +386,6 @@ partition-specific pairwise labels under `pairwise_partitions` to avoid key coll
 These retained sections are not converted into version-2 records or global pairwise
 labels. Continue using the original partitions for training-data preparation.
 Generated data stays local under the ignored `data/` directory.
+
+See [annotation review and export](annotation_tools/README.md) to review a merged
+version, reversibly skip samples, and export only the reviewed snapshot.

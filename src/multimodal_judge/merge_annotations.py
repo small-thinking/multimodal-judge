@@ -1,6 +1,8 @@
 """Merge annotation partitions without consuming previous merge outputs."""
 
 import argparse
+from datetime import datetime, timezone
+import uuid
 import hashlib
 import json
 import os
@@ -75,9 +77,11 @@ def merge_annotations(annotation_dir: Path, output: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--annotation-dir", type=Path, default=Path("data/annotations"))
-    parser.add_argument("--output", type=Path,
-                        default=Path("data/merged_annotations/merged_annotations.json"))
+    parser.add_argument("--output", type=Path, help="Explicit output path (replaced if it exists)")
     args = parser.parse_args()
+    if args.output is None:
+        version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "_" + uuid.uuid4().hex[:8]
+        args.output = args.annotation_dir.resolve().parent / "merged_annotations" / f"merged_annotations_{version}.json"
     try:
         result = merge_annotations(args.annotation_dir, args.output)
     except (ValueError, OSError) as error:

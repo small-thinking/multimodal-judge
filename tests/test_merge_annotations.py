@@ -44,3 +44,17 @@ def test_invalid_input_preserves_output(tmp_path):
         merge_annotations(source, source / "merged_annotations.json")
     with pytest.raises(ValueError, match="named"):
         merge_annotations(source, tmp_path / "ordinary.json")
+
+
+def test_cli_default_creates_distinct_versions(tmp_path, monkeypatch):
+    from multimodal_judge.merge_annotations import main
+
+    source = tmp_path / "annotations"
+    source.mkdir()
+    (source / "a.json").write_text(json.dumps({"schema_version": 2, "records": []}))
+    monkeypatch.setattr("sys.argv", ["merge_annotations", "--annotation-dir", str(source)])
+    main()
+    main()
+    outputs = list((tmp_path / "merged_annotations").glob("merged_annotations_*.json"))
+    assert len(outputs) == 2
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
