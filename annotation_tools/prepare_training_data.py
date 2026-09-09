@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 import tempfile
 
@@ -50,14 +51,38 @@ def prepare(config):
     annotation_dir = (root / "annotations").resolve()
     selected = config.get("annotation_file")
     annotation_file = None
+    selection_mode = "partition_fallback"
     if selected is not None:
         if not isinstance(selected, str) or not selected.strip():
             raise ValueError("annotation_file must be a nonempty path inside data_dir.")
+        selection_mode = "explicit"
         annotation_file = (root / Path(selected).expanduser()).resolve(strict=True)
         if not annotation_file.is_relative_to(root) or not annotation_file.is_file():
             raise ValueError("annotation_file must be a file inside data_dir.")
-    elif not annotation_dir.is_dir():
-        raise ValueError("annotations directory does not exist.")
+    else:
+        merged_dir = root / "merged_annotations"
+        # Fixed-width UTC timestamps sort chronologically; mtime is intentionally ignored.
+        versions = sorted(
+            path for path in merged_dir.glob("merged_annotations_*.json")
+            if re.fullmatch(r"merged_annotations_\d{8}T\d{12}Z_[0-9a-f]{8}\.json", path.name)
+        )
+        legacy = merged_dir / "merged_annotations.json"
+        if versions:
+            annotation_file = versions[-1]
+            selection_mode = "latest_merged"
+        elif legacy.exists():
+            annotation_file = legacy
+            selection_mode = "legacy_merged"
+        if annotation_file is not None:
+            annotation_file = annotation_file.resolve(strict=True)
+            if not annotation_file.is_relative_to(root) or not annotation_file.is_file():
+                raise ValueError("Selected merged annotation must be a file inside data_dir.")
+        elif not annotation_dir.is_dir():
+            raise ValueError("annotations directory does not exist.")
+    selection = {
+        "mode": selection_mode,
+        "path": str(annotation_file if annotation_file is not None else annotation_dir),
+    }
     if not annotation_dir.is_relative_to(root):
         raise ValueError("annotations directory must be inside data_dir.")
     if (
@@ -103,6 +128,14 @@ def prepare(config):
         if annotation_file is None and isinstance(document, dict) and document.get("artifact_type") == "merged_annotations":
             skipped.append({"file": relative_batch, "reason": "merged_annotations"})
             continue
+        if selection_mode in ("latest_merged", "legacy_merged") and (
+            not isinstance(document, dict)
+            or type(document.get("schema_version")) is not int
+            or document.get("schema_version") != 2
+            or document.get("artifact_type") != "merged_annotations"
+            or not isinstance(document.get("records"), list)
+        ):
+            raise ValueError("Selected merged annotation must be a version 2 merged_annotations artifact with records.")
         inventory.append({"path": relative_batch, "sha256": digest_file(batch)})
         if not isinstance(document, dict) or document.get("schema_version") != 2:
             skipped.append({"file": relative_batch, "reason": "legacy_or_unsupported_schema"})
@@ -234,6 +267,7 @@ def prepare(config):
     report = {
         "schema_version": 1,
         "config": {**config, "ratios": ratios, "seed": seed, "text_key": text_key, "task": task},
+        "annotation_selection": selection,
         "input_records": input_records,
         "skipped_unscored": skipped_unscored,
         "skipped_unreviewed": skipped_unreviewed,
@@ -329,6 +363,7 @@ def main():
             {
                 key: report[key]
                 for key in (
+                    "annotation_selection",
                     "input_records",
                     "skipped_unscored",
                     "skipped_unreviewed",

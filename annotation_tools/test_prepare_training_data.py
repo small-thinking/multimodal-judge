@@ -4,6 +4,7 @@ Run: python -m unittest discover -s tools -p 'test_prepare_training_data.py'
 """
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -48,6 +49,60 @@ class PrepareTrainingDataTests(unittest.TestCase):
 
     def rows(self, name, output=None):
         return [json.loads(line) for line in ((output or self.output) / name).read_text().splitlines() if line]
+
+    def merged(self, name, records):
+        path = self.data / "merged_annotations" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({"schema_version": 2,
+                                    "artifact_type": "merged_annotations", "records": records}))
+        return path
+
+    def test_latest_merged_uses_filename_timestamp_and_honors_skip(self):
+        image = self.image("valid.png")
+        self.batch("original.json", [self.record("original", image, score=2)])
+        old = self.merged("merged_annotations_20260908T120000000000Z_aaaaaaaa.json",
+                          [self.record("old", image, score=3)])
+        skipped = self.record("skipped", image, text="skip me")
+        skipped["annotation"]["skip"] = True
+        newest = self.merged("merged_annotations_20260909T120000000000Z_bbbbbbbb.json",
+                             [self.record("new", image, score=9), skipped])
+        os.utime(old, (2000000000, 2000000000))
+        os.utime(newest, (1000000000, 1000000000))
+        report = prepare(self.config())
+        self.assertEqual(report["annotation_selection"], {"mode": "latest_merged", "path": str(newest.resolve())})
+        self.assertEqual(report["skipped_explicit"], 1)
+        self.assertEqual([r["score"] for r in self.rows("all.jsonl")], [9])
+        self.assertEqual(len(report["input_files"]), 1)
+
+    def test_explicit_annotation_overrides_latest_merged(self):
+        image = self.image("valid.png")
+        old = self.merged("merged_annotations_20260908T120000000000Z_aaaaaaaa.json",
+                          [self.record("old", image, score=3)])
+        self.merged("merged_annotations_20260909T120000000000Z_bbbbbbbb.json",
+                    [self.record("new", image, score=9)])
+        report = prepare(self.config(annotation_file=str(old)))
+        self.assertEqual(report["annotation_selection"]["mode"], "explicit")
+        self.assertEqual([r["score"] for r in self.rows("all.jsonl")], [3])
+
+    def test_corrupt_or_invalid_latest_merged_aborts_without_fallback(self):
+        self.batch("original.json", [])
+        self.merged("merged_annotations_20260908T120000000000Z_aaaaaaaa.json", [])
+        newest = self.merged("merged_annotations_20260909T120000000000Z_bbbbbbbb.json", [])
+        for contents in ("{broken", "[]", '{"schema_version": 1, "records": []}',
+                         '{"schema_version": 2, "records": []}',
+                         '{"schema_version": 2, "artifact_type": "merged_annotations", "records": {}}'):
+            with self.subTest(contents=contents):
+                newest.write_text(contents)
+                with self.assertRaises(ValueError):
+                    prepare(self.config())
+                self.assertFalse(self.output.exists())
+
+    def test_legacy_merged_fallback_needs_no_partitions_directory(self):
+        (self.data / "annotations").rmdir()
+        path = self.merged("merged_annotations.json", [self.record("legacy", self.image("valid.png"))])
+        report = prepare(self.config())
+        self.assertEqual(report["annotation_selection"], {"mode": "legacy_merged", "path": str(path.resolve())})
+        self.assertEqual(report["unique_samples"], 1)
 
     def test_unscored_skipped_but_zero_kept(self):
         image = self.image("valid.png")
@@ -121,6 +176,8 @@ class PrepareTrainingDataTests(unittest.TestCase):
         report = prepare(self.config())
         self.assertEqual(report["input_records"], 1)
         self.assertEqual(len(report["skipped_files"]), 3)
+        self.assertEqual(report["annotation_selection"], {"mode": "partition_fallback",
+                                                         "path": str((self.data / "annotations").resolve())})
         self.assertEqual([r["score"] for r in self.rows("all.jsonl")], [2])
 
     def test_selected_root_file_needs_no_partitions_directory(self):
