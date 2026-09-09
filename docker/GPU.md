@@ -1,15 +1,14 @@
-# Run the private training image on an NVIDIA GPU host
+# Run the training image on an NVIDIA GPU host
 
-The GitHub repository contains only the launcher and documentation. Training data stays in the **private** Docker Hub repository `smallthinking/multimodal-judge`. You must have pull access; cloning this public repository does not grant it.
+For **RunPod Pods**, use [the RunPod setup](runpod/README.md). The Docker launcher below requires a VM or physical Docker host.
+
+The data-bundled Docker Hub repository `smallthinking/multimodal-judge` is now public with the owner's authorization. Pull authentication is optional; the image includes the training dataset.
 
 Prerequisites: Linux amd64, Python 3.11+, Docker daemon access, an NVIDIA GPU/compatible driver, and NVIDIA Container Toolkit. This launcher does not rent hardware or install/alter the host driver. Choose a GPU with enough memory for the configured batch16 workload; capacity must be confirmed with a short run on the actual host.
 
 ```sh
 git clone https://github.com/small-thinking/multimodal-judge.git
 cd multimodal-judge
-docker login -u smallthinking
-# Enter a Docker Hub read-only access token at the password prompt on the rented host.
-# Do not put tokens in shell commands, the repo, or this document.
 python3 docker/gpu.py pull
 python3 docker/gpu.py check
 python3 docker/gpu.py gpu-check
