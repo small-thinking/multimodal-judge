@@ -27,14 +27,14 @@ class JointJudgeOutput(ModelOutput):
 class JointQwen3VLForConditionalGeneration(Qwen3VLForConditionalGeneration):
     """Score the input prefix and generate reasons with the original LM head.
 
-    Regression uses normalized Huber; classification uses ten-class CE and returns
+    Regression uses normalized Huber or MSE; classification uses ten-class CE and returns
     the probability-weighted expected score. Both expose continuous 0..9 logits.
     Rationale CE projects only supervised token states, in checkpointed chunks.
     """
 
     def __init__(self, config):
         super().__init__(config)
-        defaults = {"head_type": "regression", "score_weight": 1.0,
+        defaults = {"head_type": "regression", "score_weight": 1.0, "regression_loss": "huber",
                     "rationale_weight": 0.1, "huber_delta": 0.1,
                     "score_min": 0.0, "score_max": 9.0, "ce_chunk_size": 32}
         defaults.update(getattr(config, "judge_config", {}))
@@ -42,6 +42,8 @@ class JointQwen3VLForConditionalGeneration(Qwen3VLForConditionalGeneration):
             raise ValueError("This dataset/model contract uses the raw 0..9 score scale")
         if defaults["head_type"] not in ("regression", "classification"):
             raise ValueError("head_type must be regression or classification")
+        if defaults["regression_loss"] not in ("huber", "mse"):
+            raise ValueError("regression_loss must be huber or mse")
         for key in ("score_weight", "rationale_weight", "huber_delta"):
             validate_number(defaults[key], key)
         if defaults["huber_delta"] == 0:
@@ -161,6 +163,8 @@ class JointQwen3VLForConditionalGeneration(Qwen3VLForConditionalGeneration):
         if scores is not None:
             if class_logits is not None:
                 score_loss = F.cross_entropy(class_logits, scores.long())
+            elif self.config.judge_config["regression_loss"] == "mse":
+                score_loss = F.mse_loss(normalized, scores.float() / 9.0, reduction="mean")
             else:
                 score_loss = F.huber_loss(
                     normalized, scores.float() / 9.0,

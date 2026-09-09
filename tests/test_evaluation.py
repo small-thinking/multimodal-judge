@@ -80,6 +80,12 @@ def test_pipeline_uses_train_baseline_and_preserves_examples(local_evaluation):
     checkpoint, data, output, predict = local_evaluation
     result = evaluation.run_evaluation(checkpoint, data, output, device='cpu', wandb_mode='disabled')
     assert result['metrics']['joint']['mae'] == 1.5
+    assert result['settings']['joint_reasoning_generation'] == {
+        'do_sample': True, 'num_beams': 1, 'temperature': 0.7, 'top_p': 0.8, 'top_k': 0,
+    }
+    saved = json.loads((output / 'report.json').read_text())
+    assert saved['settings']['joint_reasoning_generation'] == (
+        result['settings']['joint_reasoning_generation'])
     assert result['metrics']['joint']['rmse'] == pytest.approx(math.sqrt(2.5))
     assert result['rows'][0]['predictions']['train_median']['rating'] == 3
     assert result['metrics']['joint']['token_limit_count'] == 1

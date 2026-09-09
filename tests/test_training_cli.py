@@ -11,6 +11,97 @@ import yaml
 from multimodal_judge import cli, joint_training, training_data
 
 
+def test_generic_training_overrides_parse_yaml_and_preserve_output(monkeypatch):
+    run = Mock(return_value={})
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    settings = [
+        'training.output_dir=/outputs/custom',
+        'training.per_device_train_batch_size=2',
+        'training.learning_rate=0.0001',
+        'training.gradient_checkpointing=false',
+        'data.max_train_samples=3',
+        'data.max_eval_samples=null',
+        'data.max_length=256',
+        'lora.target_modules=[q_proj, k_proj]',
+        'prompt.system="Follow rubric: score=0..9"',
+        'wandb.mode=disabled',
+    ]
+    argv = ['multimodal-judge', 'train-joint']
+    for setting in settings:
+        argv.extend(['--set', setting])
+    monkeypatch.setattr(sys, 'argv', argv)
+    cli.main()
+    config = run.call_args.args[0]
+    for setting in settings:
+        path, value = setting.split('=', 1)
+        section, key = path.split('.')
+        assert config[section][key] == yaml.safe_load(value)
+
+
+def test_generic_overrides_last_wins_but_dedicated_flags_take_precedence(monkeypatch):
+    run = Mock(return_value={})
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(sys, 'argv', [
+        'multimodal-judge', 'train-joint', '--max-steps', '1',
+        '--output-dir', '/outputs/dedicated', '--wandb-mode', 'disabled',
+        '--set', 'training.max_steps=9', '--set', 'training.output_dir=/outputs/generic',
+        '--set', 'wandb.mode=online', '--set', 'data.max_train_samples=2',
+        '--set', 'data.max_train_samples=4',
+    ])
+    cli.main()
+    config = run.call_args.args[0]
+    assert config['training']['max_steps'] == 1
+    assert config['training']['output_dir'] == '/outputs/dedicated'
+    assert config['wandb']['mode'] == 'disabled'
+    assert config['data']['max_train_samples'] == 4
+
+
+def test_inspect_data_supports_generic_path_overrides(monkeypatch):
+    inspect = Mock(return_value={})
+    monkeypatch.setattr(training_data, 'inspect_data', inspect)
+    monkeypatch.setattr(sys, 'argv', [
+        'multimodal-judge', 'inspect-data', '--set', 'data.directory=/data/bundle',
+        '--set', 'data.train_file=splits/train.jsonl',
+        '--set', 'data.validation_file=splits/validation.jsonl',
+    ])
+    cli.main()
+    inspect.assert_called_once_with('/data/bundle', 'splits/train.jsonl',
+                                    'splits/validation.jsonl')
+
+
+@pytest.mark.parametrize('setting,message', [
+    ('training.max_steps', 'requires SECTION.KEY'),
+    ('training.max_steps.extra=1', 'requires SECTION.KEY'),
+    ('training.batch_sze=1', 'Unknown --set setting'),
+    ('unknown.value=1', 'Unknown --set setting'),
+    ('lora.target_modules=[', 'Invalid YAML'),
+    ('training.learning_rate=-1', 'training.learning_rate'),
+    ('training.gradient_checkpointing=maybe', 'must be boolean'),
+    ('training.output_dir=null', 'must be a nonempty string'),
+])
+@pytest.mark.parametrize('command', ['train-joint', 'inspect-data'])
+def test_generic_overrides_fail_before_data_or_training(monkeypatch, capsys,
+                                                         setting, message, command):
+    run, inspect = Mock(), Mock()
+    monkeypatch.setattr(joint_training, 'run_joint_training', run)
+    monkeypatch.setattr(training_data, 'inspect_data', inspect)
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', command, '--set', setting])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert message in capsys.readouterr().err
+    run.assert_not_called()
+    inspect.assert_not_called()
+
+
+def test_generic_overrides_rejected_for_unrelated_commands(monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'smoke', '--set', 'model.dtype=float32'])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert 'only supported for train-joint and inspect-data' in capsys.readouterr().err
+
+
 def test_baseline_command_rejected(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train'])
     with pytest.raises(SystemExit) as exc:
@@ -42,7 +133,7 @@ def test_auto_name_accepts_partial_config(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, 'argv', ['multimodal-judge', 'train-joint', '--config', str(path)])
     cli.main()
     config = run.call_args.args[0]
-    assert config['wandb']['name'].startswith('train-Qwen3-VL-2B-Instruct-v2-')
+    assert config['wandb']['name'].startswith('train-Qwen3-VL-2B-Instruct-v6-')
     assert config['training']['max_steps'] == 2
 
 

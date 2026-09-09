@@ -23,6 +23,9 @@ def main():
                                                      "evaluate", "evaluation-center", "log-evaluation",
                                                      "import-reasoning-reviews", "prepare-reasoning-reviews"])
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--set", dest="settings", action="append", default=[],
+                        metavar="SECTION.KEY=YAML_VALUE",
+                        help="Repeatable train-joint/inspect-data config override; dedicated flags win")
     parser.add_argument("--model", help="Override model.name_or_path")
     parser.add_argument("--data-dir", type=Path, help="Directory containing split JSONL files")
     parser.add_argument("--output-dir", type=Path)
@@ -57,6 +60,8 @@ def main():
     parser.add_argument("--judge-effort", choices=["none", "low", "medium", "high", "xhigh"], default="low")
     parser.add_argument("--judge-cache-dir", type=Path, default=Path("artifacts/evaluation/judge-cache"))
     args = parser.parse_args()
+    if args.settings and args.command not in ('train-joint', 'inspect-data'):
+        parser.error('--set is only supported for train-joint and inspect-data')
     if args.command != 'train-joint' and (
         args.score_head is not None or args.score_weight is not None
     ):
@@ -138,6 +143,27 @@ def main():
     config = yaml.safe_load(config_path.read_text())
     if not isinstance(config, dict):
         parser.error("Configuration must be a YAML mapping")
+    overridden_keys = set()
+    if args.settings:
+        from .training_config import resolve_config
+
+        known_settings = resolve_config({})
+        for setting in args.settings:
+            key_path, separator, raw_value = setting.partition('=')
+            parts = key_path.split('.')
+            if not separator or len(parts) != 2:
+                parser.error('--set requires SECTION.KEY=YAML_VALUE')
+            section, key = parts
+            if section not in known_settings or key not in known_settings[section]:
+                parser.error(f'Unknown --set setting: {key_path}')
+            try:
+                value = yaml.safe_load(raw_value)
+            except yaml.YAMLError as error:
+                parser.error(f'Invalid YAML for --set {key_path}: {error}')
+            if not isinstance(config.setdefault(section, {}), dict):
+                parser.error(f'Configuration section {section} must be a YAML mapping')
+            config[section][key] = value
+            overridden_keys.add(key_path)
     for section, key, value in [
         ("model", "name_or_path", args.model),
         ("data", "directory", str(args.data_dir) if args.data_dir is not None else None),
@@ -151,6 +177,11 @@ def main():
     ]:
         if value is not None:
             config.setdefault(section, {})[key] = value
+    if args.settings:
+        try:
+            resolve_config(config)
+        except ValueError as error:
+            parser.error(str(error))
     if args.command == "inspect-data":
         from .training_data import inspect_data
 
@@ -165,7 +196,8 @@ def main():
         from .run_naming import make_run_name
         from .training_config import resolve_config
 
-        if args.output_dir is None and args.resume_from_checkpoint is None:
+        if (args.output_dir is None and args.resume_from_checkpoint is None
+                and 'training.output_dir' not in overridden_keys):
             resolved = resolve_config(config)
             name = make_run_name('train', resolved['model']['name_or_path'],
                                  resolved['data']['directory'])

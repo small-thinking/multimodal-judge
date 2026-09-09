@@ -19,6 +19,12 @@ from .training_config import (
 )
 
 
+# Explicit nucleus sampling for explanations; scoring still uses the numeric head.
+RATIONALE_GENERATION = {
+    "do_sample": True, "num_beams": 1, "temperature": 0.7, "top_p": 0.8, "top_k": 0,
+}
+
+
 def joint_regression_metrics(prediction):
     """Raw continuous-score metrics; reject nonfinite outputs instead of hiding them."""
     import numpy as np
@@ -31,7 +37,8 @@ def joint_regression_metrics(prediction):
     if not len(scores):
         return {'count': 0}
     errors = scores - references
-    return dict(mae=float(np.abs(errors).mean()), rmse=float(np.sqrt((errors ** 2).mean())),
+    return dict(mse=float((errors ** 2).mean()),
+                mae=float(np.abs(errors).mean()), rmse=float(np.sqrt((errors ** 2).mean())),
                 count=len(scores))
 
 
@@ -39,8 +46,10 @@ class _LossTotals:
     def __init__(self):
         self.samples = self.rationale_samples = self.rationale_tokens = 0
         self.score_sum = self.rationale_sum = 0.0
+        self.squared_error_sum = self.absolute_error_sum = 0.0
+        self.error_samples = 0
 
-    def add(self, outputs, batch_size):
+    def add(self, outputs, batch_size, scores=None):
         def scalar(name):
             value = outputs[name]
             return float(value.detach().item()) if hasattr(value, 'detach') else float(value)
@@ -50,16 +59,27 @@ class _LossTotals:
         self.rationale_tokens += scalar('rationale_tokens')
         self.score_sum += scalar('score_loss') * batch_size
         self.rationale_sum += scalar('rationale_loss') * count
+        if scores is not None:
+            errors = (outputs.logits.detach().reshape(-1).float()
+                      - scores.detach().reshape(-1).float())
+            self.squared_error_sum += errors.square().sum().item()
+            self.absolute_error_sum += errors.abs().sum().item()
+            self.error_samples += errors.numel()
 
     def metrics(self, prefix=''):
         if not self.samples:
             return {}
-        return {prefix + key: value for key, value in dict(
+        metrics = dict(
             score_loss=self.score_sum / self.samples,
             rationale_loss=self.rationale_sum / max(1, self.rationale_samples),
             rationale_samples=self.rationale_samples, rationale_tokens=self.rationale_tokens,
             rationale_coverage=self.rationale_samples / self.samples,
-            score_samples=self.samples).items()}
+            score_samples=self.samples)
+        if self.error_samples:
+            mse = self.squared_error_sum / self.error_samples
+            metrics.update(mse=mse, rmse=mse ** .5,
+                           mae=self.absolute_error_sum / self.error_samples)
+        return {prefix + key: value for key, value in metrics.items()}
 
 
 def sampled_memory_metrics(device):
@@ -73,13 +93,14 @@ def sampled_memory_metrics(device):
 
 def training_chart_metrics(logs):
     names = {'loss': 'loss', 'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
+             'mse': 'mse', 'rmse': 'rmse', 'mae': 'mae',
              'learning_rate': 'learning_rate', 'grad_norm': 'grad_norm',
              'rationale_coverage': 'reasoning_coverage'}
     result = {}
     for key, value in numeric_metrics(logs).items():
         if key.startswith('eval_'):
             name = key.removeprefix('eval_')
-            validation_names = {'loss': 'loss', 'mae': 'mae', 'rmse': 'rmse',
+            validation_names = {'loss': 'loss', 'mse': 'mse', 'mae': 'mae', 'rmse': 'rmse',
                                 'accuracy': 'accuracy', 'within_one': 'within_one',
                                 'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
                                 'rationale_coverage': 'reasoning_coverage'}
@@ -108,6 +129,16 @@ class MetricsCallback(TrainerCallback):
                   'optimizer_step': state.global_step}
         if logs is not None:
             logs.update(values)
+        # A scalar-only stream also supports online monitoring from an SSH relay
+        # without placing cloud-service credentials on a rented training machine.
+        output_dir = getattr(args, 'output_dir', None)
+        if output_dir:
+            stream = Path(output_dir) / 'metrics-history.jsonl'
+            stream.parent.mkdir(parents=True, exist_ok=True)
+            with stream.open('a') as handle:
+                handle.write(json.dumps({**training_chart_metrics(logs or {}),
+                    'optimizer_step': state.global_step,
+                    'epoch': state.epoch}, allow_nan=False) + '\n')
         if self.run is not None:
             # W&B's internal step must advance even when optimizer_step is unchanged.
             charts = training_chart_metrics(logs or {})
@@ -138,7 +169,7 @@ class JointTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         outputs = model(**inputs)
         totals = self._train_totals if model.training else self._eval_totals
-        totals.add(outputs, inputs['scores'].shape[0])
+        totals.add(outputs, inputs['scores'].shape[0], inputs['scores'])
         return (outputs.loss, outputs) if return_outputs else outputs.loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
@@ -152,7 +183,9 @@ class JointTrainer(Trainer):
     def evaluation_loop(self, *args, metric_key_prefix='eval', **kwargs):
         self._eval_totals = _LossTotals()
         output = super().evaluation_loop(*args, metric_key_prefix=metric_key_prefix, **kwargs)
-        output.metrics.update(self._eval_totals.metrics(metric_key_prefix + '_'))
+        # Keep the full-dataset, float64 prediction metrics as authoritative.
+        for key, value in self._eval_totals.metrics(metric_key_prefix + '_').items():
+            output.metrics.setdefault(key, value)
         dataloader = args[0] if args else kwargs.get('dataloader')
         if metric_key_prefix == 'eval':
             self._save_validation_residuals(output, dataloader)
@@ -257,7 +290,7 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
             del outputs, batch
             batch = encode(reasoning_prefix(processor, text, score, system_prompt))
             length = batch['input_ids'].shape[-1]
-            generated = model.generate(**batch, do_sample=False, num_beams=1,
+            generated = model.generate(**batch, **RATIONALE_GENERATION,
                                        max_new_tokens=max_new_tokens, use_cache=True)
             reasoning = processor.batch_decode(generated[:, length:], skip_special_tokens=True)[0]
             result = {'score': score, 'reasoning': reasoning}
@@ -318,6 +351,7 @@ def _validate_paths(resolved, resume):
             if isinstance(previous_objective, dict):
                 previous_objective.setdefault('head_type', 'regression')
                 previous_objective.setdefault('score_weight', 1.0)
+                previous_objective.setdefault('regression_loss', 'huber')
             if previous.get("prompt", {"system": ""}) != resolved["prompt"]:
                 raise ValueError("Resume prompt configuration differs from saved run")
             for section in ('model', 'objective', 'lora'):
@@ -349,6 +383,8 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
 
     device = select_device(resolved["runtime"]["device"], torch)
     resolved["runtime"]["device"] = device
+    if device == "cpu":
+        torch.backends.mkldnn.enabled = resolved["runtime"]["cpu_mkldnn"]
     if device != "cuda" and model_config["dtype"] == "float16":
         raise ValueError("float16 training requires CUDA; use float32 on CPU/MPS")
     if device == "mps":
@@ -498,7 +534,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
         if run is not None:
             run.summary.update({"validation/" + key.removeprefix("eval_"): value
                                 for key, value in numeric_metrics(metrics).items()
-                                if key in ("eval_loss", "eval_mae", "eval_rmse", "eval_accuracy",
+                                if key in ("eval_loss", "eval_mse", "eval_mae", "eval_rmse", "eval_accuracy",
                                            "eval_within_one")})
         (output / "metrics.json").write_text(
             json.dumps(metrics, indent=2, allow_nan=False) + "\n")

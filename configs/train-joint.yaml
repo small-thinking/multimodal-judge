@@ -1,11 +1,28 @@
 prompt:
-  system: |-
-    You are a rating assistant. You will receive an image and its corresponding text description.
-    Assess them together according to the provided scoring criteria. Give a concise explanation
-    supported by the image and text; do not invent missing details.
-    The final response is a JSON object with exactly two fields: "reasoning" (a string) and
-    "rating" (a number from 0 to 9). Complete the reasoning for the supplied rating;
-    the application assembles the final JSON response.
+  system: 'You are an AV cover rater. Score 0-9 from the cover image and title only. Do not invent scenes that are not visible or stated.
+
+Goal: filter low-quality content. Prefer East-Asian innocent/pretty faces, real amateur feel, real penetration/creampie, and high-quality FFMs (2 women + 1 man). Attractive mature women and high-quality commercial "innocent face" titles are also acceptable.
+Dislike: one woman with multiple men, heavy SM, dark/no-face/blurry shots. Solo toys and girl-girl are slightly lower unless the face and quality are strong.
+
+Cover rule: amateur covers may be selfies, masks, or daily photos with no nudity; use the title to judge if real sex is likely. For commercial covers, use the main image plus inset sex shots. Penalize a large mismatch between title and image. Commercial titles score about 1 point lower than similar amateur ones.
+
+Write a short reasoning in this order:
+1) what the image shows (people, nudity/insertion, face clarity, lighting)
+2) title alignment
+3) style (amateur vs commercial)
+4) theme
+5) face/body
+6) plus/minus points
+
+Score anchors:
+0-2 no face, extremely dark, blurry, or bad theme
+3-4 one woman + multiple men, or average commercial/SM with no insertion highlight
+5-6 pretty face but only breast-shake/toys/daily photos plus a suggestive title; or average commercial with insertion
+7-8 clear innocent/pretty face plus strong amateur realism or high-quality insertion/contrast
+9 reserved for an exceptional innocent face plus real penetration or high-quality FFM
+
+Output JSON only: {"reasoning":"...","rating":N}'
+    
 # Run from the repository root. Configurable scoring + bounded rationale SFT.
 model:
   name_or_path: Qwen/Qwen3-VL-2B-Instruct
@@ -15,6 +32,7 @@ model:
   max_pixels: 65536
 objective:
   head_type: regression  # regression (normalized Huber) or classification (10-class CE)
+  regression_loss: mse
   score_weight: 1.0  # Multiplies only the scoring loss; logged score_loss is unweighted.
   rationale_weight: 0.1
   huber_delta: 0.1
@@ -22,8 +40,8 @@ objective:
   score_max: 9.0
   ce_chunk_size: 32
 data:
-  directory: data/training_data/v2
-  train_file: train.jsonl
+  directory: data/training_data/data-refresh-20260909T210343Z
+  train_file: train_original.jsonl
   validation_file: validation.jsonl
   max_train_samples: null
   max_eval_samples: null
@@ -40,16 +58,16 @@ runtime:
   mps_memory_fraction: 0.75
 training:
   output_dir: artifacts/training/qwen3-vl-2b-joint
-  num_train_epochs: 2
+  num_train_epochs: 10
   max_steps: -1
-  per_device_train_batch_size: 1
+  per_device_train_batch_size: 16
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 8
-  learning_rate: 0.0002
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
   logging_steps: 1
-  eval_steps: 100
-  save_steps: 100
-  save_total_limit: 2
+  eval_steps: 25
+  save_steps: 25
+  save_total_limit: 20
   gradient_checkpointing: true
   dataloader_num_workers: 0
   seed: 42
@@ -57,6 +75,6 @@ training:
   max_new_tokens: 128
 wandb:
   project: multimodal-judge
-  entity: null
-  mode: offline
+  entity: techtao-small-thinking
+  mode: online
   name: null

@@ -9,6 +9,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY configs ./configs
+COPY configs/train-joint.yaml /app/training.yaml
 
 # Install the project non-editably so the image is self-contained.
 FROM base AS cpu

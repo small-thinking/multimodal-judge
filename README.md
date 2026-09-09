@@ -385,3 +385,7 @@ partition-specific pairwise labels under `pairwise_partitions` to avoid key coll
 These retained sections are not converted into version-2 records or global pairwise
 labels. Continue using the original partitions for training-data preparation.
 Generated data stays local under the ignored `data/` directory.
+
+## Current original-only MSE training
+
+The current RunPod image and ten-epoch online W&B workflow are documented in [docker/runpod/README.md](docker/runpod/README.md). The image embeds the portable dataset and all training configs. Runtime flags override defaults.
