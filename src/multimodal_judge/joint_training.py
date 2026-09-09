@@ -35,6 +35,18 @@ def joint_regression_metrics(prediction):
                 count=len(scores))
 
 
+def reasoning_rep4(token_ids):
+    """Within-answer repeated 4-gram fraction; fewer than four tokens is undefined.
+
+    Callers supply generated body tokens only, without prompt or special tokens.
+    Corpus aggregation is a mean over eligible answers, not pooled token windows.
+    """
+    if len(token_ids) < 4:
+        return None
+    windows = [tuple(token_ids[i:i + 4]) for i in range(len(token_ids) - 3)]
+    return 1 - len(set(windows)) / len(windows)
+
+
 class _LossTotals:
     def __init__(self):
         self.samples = self.rationale_samples = self.rationale_tokens = 0
@@ -82,6 +94,7 @@ def training_chart_metrics(logs):
             validation_names = {'loss': 'loss', 'mae': 'mae', 'rmse': 'rmse',
                                 'accuracy': 'accuracy', 'within_one': 'within_one',
                                 'score_loss': 'score_loss', 'rationale_loss': 'reasoning_loss',
+                                'reasoning_rep4': 'reasoning_rep4',
                                 'rationale_coverage': 'reasoning_coverage'}
             if name in validation_names:
                 result['validation/' + validation_names[name]] = value
@@ -116,9 +129,10 @@ class MetricsCallback(TrainerCallback):
 
 
 class JointTrainer(Trainer):
-    def __init__(self, *args, joint_manifest=None, **kwargs):
+    def __init__(self, *args, joint_manifest=None, repetition_eval_options=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.joint_manifest = copy.deepcopy(joint_manifest)
+        self.repetition_eval_options = copy.deepcopy(repetition_eval_options)
         self.model_accepts_loss_kwargs = False
         self._train_totals = _LossTotals()
         self._eval_totals = _LossTotals()
@@ -156,7 +170,25 @@ class JointTrainer(Trainer):
         dataloader = args[0] if args else kwargs.get('dataloader')
         if metric_key_prefix == 'eval':
             self._save_validation_residuals(output, dataloader)
+            if self.repetition_eval_options is not None:
+                output.metrics.update(self._evaluate_repetition(dataloader.dataset))
         return output
+
+    def _evaluate_repetition(self, dataset):
+        """Generate on the same validation rows; retain aggregates, never answer text."""
+        values = []
+        for record in dataset:
+            prediction = predict_joint(
+                self.model, self.processing_class, record['image'], record['text'],
+                device=self.args.device, return_metadata=True, **self.repetition_eval_options)
+            if prediction['reasoning_rep4'] is not None:
+                values.append(prediction['reasoning_rep4'])
+        # Counts remain local so undefined short answers are not silently scored as zero.
+        metrics = {'eval_reasoning_rep4_samples': len(values),
+                   'eval_reasoning_rep4_short_samples': len(dataset) - len(values)}
+        if values:
+            metrics['eval_reasoning_rep4'] = sum(values) / len(values)
+        return metrics
 
     def _save_validation_residuals(self, output, dataloader):
         """Persist numeric residuals from the existing ordered, single-process evaluation."""
@@ -267,6 +299,9 @@ def predict_joint(model, processor, image, text, max_length=1024, max_new_tokens
                 eos = [eos] if isinstance(eos, int) else (eos or [])
                 result.update(tokens=len(tokens), hit_token_limit=len(tokens) >= max_new_tokens
                               and (not tokens or tokens[-1] not in eos))
+                special_ids = set(processor.tokenizer.all_special_ids)
+                result['reasoning_rep4'] = reasoning_rep4(
+                    [token for token in tokens if token not in special_ids])
             return result
     finally:
         model.train(was_training)
@@ -379,7 +414,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
             raise ImportError("Install wandb or set wandb.mode='disabled'") from exc
     peft = importlib.import_module("peft") if resolved["lora"]["enabled"] else None
     args_values = {key: value for key, value in training.items()
-                   if key not in ("generate_eval", "max_new_tokens")}
+                   if key not in ("generate_eval", "repetition_eval", "max_new_tokens")}
     args = TrainingArguments(
         **args_values, use_cpu=device == "cpu", report_to=[], disable_tqdm=False,
         remove_unused_columns=False, prediction_loss_only=False, label_names=["scores"],
@@ -467,6 +502,10 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
                                      max_reasoning_tokens=data["max_reasoning_tokens"],
                                      system_prompt=resolved["prompt"]["system"])
         trainer = JointTrainer(model=model, args=args, joint_manifest=manifest,
+                          repetition_eval_options=(dict(max_length=data['max_length'],
+                              max_new_tokens=training['max_new_tokens'],
+                              system_prompt=resolved['prompt']['system'])
+                              if training['repetition_eval'] else None),
                           train_dataset=train_dataset,
                           eval_dataset=eval_dataset if do_eval else None,
                           data_collator=collator, processing_class=processor,
@@ -499,7 +538,7 @@ def run_joint_training(config: dict, resume_from_checkpoint: str | None = None):
             run.summary.update({"validation/" + key.removeprefix("eval_"): value
                                 for key, value in numeric_metrics(metrics).items()
                                 if key in ("eval_loss", "eval_mae", "eval_rmse", "eval_accuracy",
-                                           "eval_within_one")})
+                                           "eval_within_one", "eval_reasoning_rep4")})
         (output / "metrics.json").write_text(
             json.dumps(metrics, indent=2, allow_nan=False) + "\n")
         exit_code = 0

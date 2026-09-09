@@ -58,13 +58,16 @@ def test_joint_training_reload_and_inference(tmp_path, head_type):
     output = tmp_path / "run"
     settings["training"].update(output_dir=str(output), max_steps=1, save_steps=1,
                                   eval_steps=1, gradient_accumulation_steps=1,
-                                  max_new_tokens=2, generate_eval=True)
+                                  max_new_tokens=5, generate_eval=True, repetition_eval=True)
     # Preserve the original offline-logging check for regression; classification
     # also exercises the fully disabled path, without a W&B service dependency.
     settings["wandb"]["mode"] = "offline" if head_type == 'regression' else 'disabled'
     metrics = run_joint_training(settings)
     assert 0 <= metrics["eval_mae"] <= 9
     assert metrics["eval_rationale_loss"] > 0
+    assert metrics['eval_reasoning_rep4_samples'] + metrics['eval_reasoning_rep4_short_samples'] == 1
+    if metrics['eval_reasoning_rep4_samples']:
+        assert 0 <= metrics['eval_reasoning_rep4'] <= 1
     weights = load_file(str(output / "adapter_model.safetensors"))
     assert any("score_head" in key for key in weights)
     assert any("lora_B" in key and value.abs().sum() > 0 for key, value in weights.items())

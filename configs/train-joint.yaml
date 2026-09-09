@@ -54,6 +54,7 @@ training:
   dataloader_num_workers: 0
   seed: 42
   generate_eval: false  # Optional final rationale generation using PREDICTED scores.
+  repetition_eval: false  # Generate validation reasons at every eval; log mean Rep-4.
   max_new_tokens: 128
 wandb:
   project: multimodal-judge

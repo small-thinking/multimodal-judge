@@ -42,6 +42,7 @@ def test_config_defaults_match_yaml_and_are_independent():
     ('objective', 'score_weight', float('nan')), ('objective', 'score_weight', True),
     ('objective', 'head_type', 'ordinal'), ('objective', 'head_type', None),
     ('data', 'max_reasoning_tokens', 0), ('runtime', 'mps_memory_fraction', 1.1),
+    ('training', 'repetition_eval', 1),
     ('runtime', 'mps_memory_fraction', 0), ('training', 'max_steps', 0),
     ('prompt', 'system', None), ('prompt', 'system', 42),
     ('model', 'trust_remote_code', True), ('lora', 'modules_to_save', []),
@@ -127,6 +128,62 @@ def test_generation_rejects_overlong_prompt():
         joint.predict_joint(model, processor, object(), 'synthetic', max_length=2)
     model.generate.assert_not_called()
     model.train.assert_called_once_with(False)
+
+
+@pytest.mark.parametrize('tokens,expected', [
+    ([], None), ([1, 2, 3], None), ([1, 2, 3, 4], 0.0),
+    ([1, 2, 3, 4, 5, 6], 0.0), ([1, 1, 1, 1, 1], .5),
+    ([1, 2, 3, 4, 1, 2, 3, 4], .2),
+])
+def test_reasoning_rep4(tokens, expected):
+    actual = joint.reasoning_rep4(tokens)
+    assert actual is None if expected is None else actual == pytest.approx(expected)
+
+
+def test_generation_rep4_excludes_prompt_and_special_tokens():
+    processor = Mock()
+    processor.apply_chat_template.return_value = 'prompt'
+    processor.return_value = {'input_ids': torch.tensor([[7, 7, 7, 7, 7]]),
+                              'attention_mask': torch.ones(1, 5, dtype=torch.long)}
+    processor.tokenizer.all_special_ids = [0, 2]
+    processor.batch_decode.return_value = ['private generated answer']
+    model = Mock(training=True)
+    model.return_value = SimpleNamespace(logits=torch.tensor([[6.75]]))
+    model.generation_config.eos_token_id = [2]
+    model.generate.return_value = torch.tensor([[7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 2]])
+    result = joint.predict_joint(model, processor, object(), 'synthetic', return_metadata=True)
+    assert result['reasoning_rep4'] == .5
+    assert result['tokens'] == 6 and result['hit_token_limit'] is False
+    model.train.assert_called_once_with(True)
+
+
+def test_repetition_averages_answers_and_excludes_short_outputs(monkeypatch):
+    trainer = object.__new__(joint.JointTrainer)
+    trainer.model = Mock()
+    trainer.processing_class = Mock()
+    trainer.args = SimpleNamespace(device='cpu')
+    trainer.repetition_eval_options = dict(max_length=1024, max_new_tokens=129,
+                                           system_prompt='Synthetic rubric')
+    generate = Mock(side_effect=[{'reasoning_rep4': .2}, {'reasoning_rep4': .6},
+                                 {'reasoning_rep4': None}])
+    monkeypatch.setattr(joint, 'predict_joint', generate)
+    rows = [{'image': object(), 'text': 'synthetic', 'score': 9,
+             'reasoning': 'gold must not be passed'} for _ in range(3)]
+    metrics = trainer._evaluate_repetition(rows)
+    assert metrics == {'eval_reasoning_rep4': pytest.approx(.4),
+                       'eval_reasoning_rep4_samples': 2,
+                       'eval_reasoning_rep4_short_samples': 1}
+    for call in generate.call_args_list:
+        assert call.args[2] in [row['image'] for row in rows]
+        assert call.args[3] == 'synthetic' and len(call.args) == 4
+        assert call.kwargs == dict(device='cpu', return_metadata=True,
+                                   **trainer.repetition_eval_options)
+    # Only the requested curve goes to W&B; local counts are not extra charts.
+    assert joint.training_chart_metrics(metrics) == {'validation/reasoning_rep4': pytest.approx(.4)}
+    generate.side_effect = [{'reasoning_rep4': None}] * 3
+    metrics = trainer._evaluate_repetition(rows)
+    assert metrics == {'eval_reasoning_rep4_samples': 0, 'eval_reasoning_rep4_short_samples': 3}
+    assert joint.training_chart_metrics(metrics) == {}
 
 
 @pytest.fixture
@@ -432,6 +489,36 @@ def test_runner_wandb_numeric_logging_and_cleanup(local_runner, monkeypatch, fai
     run.finish.assert_called_once_with(exit_code=1 if failure else 0)
 
 
+def test_periodic_and_final_repetition_reaches_wandb(local_runner, monkeypatch):
+    run = Mock(url='https://wandb.ai/synthetic')
+    monkeypatch.setitem(sys.modules, 'wandb', SimpleNamespace(
+        init=Mock(return_value=run), Settings=Mock()))
+    local_runner.config['wandb']['mode'] = 'offline'
+    local_runner.config['training'].update(repetition_eval=True, max_steps=2)
+    (Path(local_runner.config['data']['directory']) / 'validation.jsonl').write_text('{}\n')
+    calls = []
+
+    def evaluate(trainer, dataset):
+        calls.append(trainer.state.global_step)
+        assert trainer.repetition_eval_options == dict(
+            max_length=1024, max_new_tokens=128, system_prompt='')
+        assert not trainer.model.training
+        return {'eval_reasoning_rep4': .25, 'eval_reasoning_rep4_samples': 2,
+                'eval_reasoning_rep4_short_samples': 0}
+
+    monkeypatch.setattr(joint.JointTrainer, '_evaluate_repetition', evaluate)
+    metrics = joint.run_joint_training(local_runner.config)
+    assert calls == [1, 2, 2]  # eval_steps=1 plus the final evaluation
+    assert metrics['eval_reasoning_rep4'] == .25
+    logs = [call.args[0] for call in run.log.call_args_list
+            if 'validation/reasoning_rep4' in call.args[0]]
+    assert [log['optimizer_step'] for log in logs] == calls
+    assert all(log['validation/reasoning_rep4'] == .25 for log in logs)
+    assert run.summary.update.call_args.args[0]['validation/reasoning_rep4'] == .25
+    assert all(isinstance(value, (int, float))
+               for call in run.log.call_args_list for value in call.args[0].values())
+
+
 def test_language_attention_regex():
     pattern = training_config.language_attention_pattern(["q_proj", "v_proj"])
     assert re.fullmatch(pattern, "model.language_model.layers.0.self_attn.q_proj")
@@ -500,6 +587,7 @@ def test_validation_residuals_reuse_ordered_loop_predictions(tmp_path, monkeypat
     loader = Accelerator(cpu=True).prepare_data_loader(DataLoader(dataset))
     trainer = object.__new__(joint.JointTrainer)
     trainer.args = SimpleNamespace(output_dir=str(tmp_path / 'run'), world_size=1)
+    trainer.repetition_eval_options = None
     trainer.state = SimpleNamespace(global_step=100)
     monkeypatch.setattr(trainer, 'is_world_process_zero', lambda: True)
     output = EvalLoopOutput(predictions=np.array([[8.], [2.]]), label_ids=np.array([5., 3.]),

@@ -20,6 +20,7 @@ _DEFAULTS = {
                  "learning_rate": 0.0002, "logging_steps": 1, "eval_steps": 100,
                  "save_steps": 100, "save_total_limit": 2, "gradient_checkpointing": True,
                  "dataloader_num_workers": 0, "seed": 42, "generate_eval": False,
+                 "repetition_eval": False,
                  "max_new_tokens": 128},
     "runtime": {"device": "auto", "mps_memory_fraction": 0.75},
     "objective": {"head_type": "regression", "score_weight": 1.0,
@@ -87,7 +88,7 @@ def resolve_config(config):
     if resolved["training"]["max_steps"] == 0:
         raise ValueError("training.max_steps must be -1 or positive")
     for section, key in (("lora", "enabled"), ("training", "gradient_checkpointing"),
-                         ("training", "generate_eval")):
+                         ("training", "generate_eval"), ("training", "repetition_eval")):
         if not isinstance(resolved[section][key], bool):
             raise ValueError(f"{section}.{key} must be boolean")
     validate_number(resolved["lora"]["dropout"], "lora.dropout")

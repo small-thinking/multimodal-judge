@@ -55,7 +55,8 @@ training:
   dataloader_num_workers: 0
   seed: 42
   generate_eval: false  # Optional final rationale generation using PREDICTED scores.
-  max_new_tokens: 128
+  repetition_eval: true  # One W&B curve: validation/reasoning_rep4, at every eval.
+  max_new_tokens: 129  # 128 supervised body tokens plus one EOS.
 wandb:
   project: multimodal-judge
   entity: null
